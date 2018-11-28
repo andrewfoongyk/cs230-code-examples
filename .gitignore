@@ -102,3 +102,10 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+pytorch/cs230pytorch
+pytorch/vision/experiments
+pytorch/vision/data
+pytorch/.vscode
+pytorch/data
+pytorch/pytorch_tutorial/data

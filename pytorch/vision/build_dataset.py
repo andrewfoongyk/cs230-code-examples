@@ -36,7 +36,7 @@ def resize_and_save(filename, output_dir, size=SIZE):
     image = Image.open(filename)
     # Use bilinear interpolation instead of the default "nearest neighbor" method
     image = image.resize((size, size), Image.BILINEAR)
-    image.save(os.path.join(output_dir, filename.split('/')[-1]))
+    image.save(os.path.join(output_dir, filename.split('\\')[-1]))
 
 
 if __name__ == '__main__':

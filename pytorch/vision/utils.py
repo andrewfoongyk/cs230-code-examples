@@ -119,6 +119,8 @@ def save_checkpoint(state, is_best, checkpoint):
         print("Checkpoint Directory exists! ")
     torch.save(state, filepath)
     if is_best:
+        # print(filepath)
+        # print(os.path.join(checkpoint, 'best.pth.tar'))
         shutil.copyfile(filepath, os.path.join(checkpoint, 'best.pth.tar'))
 
 

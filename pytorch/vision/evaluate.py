@@ -45,9 +45,17 @@ def evaluate(model, loss_fn, dataloader, metrics, params):
         # fetch the next evaluation batch
         data_batch, labels_batch = Variable(data_batch), Variable(labels_batch)
         
-        # compute model output
-        output_batch = model(data_batch)
-        loss = loss_fn(output_batch, labels_batch)
+        # compute model output 
+        if params.dataset == 'mnist':
+            testset_size = 10000
+        elif params.dataset == 'signs':
+            testset_size = 216
+
+        output_batch = model(data_batch, no_samples = params.test_samples)
+        if params.model == 'mfvi':
+            loss = loss_fn(output_batch, labels_batch, model, testset_size)
+        else:
+            loss = loss_fn(outputs = output_batch, labels = labels_batch, model = model)
 
         # extract data from torch Variable, move to cpu, convert to numpy arrays
         output_batch = output_batch.data.cpu().numpy()
@@ -56,7 +64,7 @@ def evaluate(model, loss_fn, dataloader, metrics, params):
         # compute all metrics on this batch
         summary_batch = {metric: metrics[metric](output_batch, labels_batch)
                          for metric in metrics}
-        summary_batch['loss'] = loss.data[0]
+        summary_batch['loss'] = loss.item()
         summ.append(summary_batch)
 
     # compute mean of all metrics in summary

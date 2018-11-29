@@ -22,6 +22,7 @@ class FCVI_Net(nn.Module):
         self.dataset = params.dataset
         self.activation_name = params.activation
         self.hidden_sizes = params.hidden_sizes
+        self.omega = params.omega
         if params.activation == 'relu':
             self.activation = F.relu
         elif params.activation == 'tanh':
@@ -48,20 +49,24 @@ class FCVI_Net(nn.Module):
             self.input_channels = 3
             self.input_size = 64*64
             self.output_size = 6
-
+        
+        # count the number of parameters (weights and biases)
+        self.no_params = self.count_params()
+        # initialise the prior
+        self.init_prior()
         # initialise covariance (in vector form) and means
-        self.init_params()
+        self.init_params(prior_init)
 
     def forward(self, x, no_samples):
         batch_size = x.size()[0] # x has dimensions (batch_size x no_inputs)
         # use cov_vector to fill in L
         L = torch.zeros(self.no_params, self.no_params)
-        L[np.tril_indices(no_params)] = self.cov_vector
+        L[np.tril_indices(self.no_params)] = self.cov_vector
         # exponentiate the diagonal
         L_diag = torch.diag(L)
         L_diag_mat = torch.diag(L_diag)
-        L = L - L_diag_mat + torch.diag(torch.exp(L_diag)) # cholesky decomposition
-        Sigma = torch.mm(L, torch.t(L)) # covariance matrix
+        self.L = L - L_diag_mat + torch.diag(torch.exp(L_diag)) # cholesky decomposition
+        self.Sigma = torch.mm(L, torch.t(L)) # covariance matrix
         # sample all parameters
         samples = self.get_samples(L, no_samples, batch_size)
         # unpack weights and biases
@@ -72,6 +77,25 @@ class FCVI_Net(nn.Module):
             activities = torch.einsum('bi,iosb->osb', (activations, weights[i])) + biases[i]
             activations = self.activation(activities) # apply nonlinearity
         output = torch.einsum('bi,iosb->osb', (activations, weights[-1])) + biases[-1] # final linear layer and bias
+        output = output.permute(1,2,0) # get indeces into 'standard form' - (samples x batch_size x output_dims)
+
+    def get_KL_term(self):
+        # calculate KL divergence between q and the prior for the entire network
+        const_term = -self.no_params
+        logdet_prior = torch.sum(torch.log(self.prior_variance_vector))
+        logdet_q = 2*torch.sum(torch.log(torch.diag(self.L)))
+        logdet_term = logdet_prior - logdet_q
+        prior_cov_inv = torch.diag(1/self.prior_variance_vector)
+        trace_term = torch.trace(torch.mm(prior_cov_inv, self.Sigma)) # is there a more efficient way to do this?
+        mu_diff = self.prior_mean - self.mean
+        quad_term = torch.matmul(mu_diff, torch.matmul(prior_cov_inv, mu_diff)) # and this?
+        kl = 0.5*(const_term + logdet_term + trace_term + quad_term)
+        return kl
+
+    def return_weights(self):
+        """return the marginal statistics of the weights and biases of the network"""
+        # return a list of lists - the first list goes through layers, and each item is a list that has means in 0th place and S.D.'s in 1st place
+    ##################### to do
 
     def unpack_samples(self, samples, no_samples, batch_size):
         start_index = 0
@@ -87,34 +111,37 @@ class FCVI_Net(nn.Module):
         end_index = end_index + self.hidden_sizes[0]
         biases_vector = samples[start_index:end_index, :, :]
         biases.append(biases_vector)
-        for i in range(): #################
-        
-
-    def _unpack_samples(self, samples, no_samples):
-        start_ind = 0
-        end_ind = 0
-        weights = []
-        biases = []
-        K = no_samples
-        for i in range(self.no_layers):
-            Din = self.size[i]
-            Dout = self.size[i+1]
-            end_ind += Din * Dout
-            weights.append(tf.reshape(samples[:, start_ind:end_ind], [K, Din, Dout]))
-            start_ind += Din * Dout
-            end_ind += Dout
-            biases.append(tf.reshape(samples[:, start_ind:end_ind], [K, 1, Dout]))
-            start_ind += Dout
+        start_index = start_index + self.hidden_sizes[0]
+        for i in range(len(self.hidden_sizes)-1): 
+            end_index = end_index + self.hidden_sizes[i]*self.hidden_sizes[i+1]
+            weight_vector = samples[start_index:end_index, :, :]
+            weight_matrix = weight_vector.view(self.hidden_sizes[i], self.hidden_sizes[i+1], no_samples, batch_size)
+            weights.append(weight_matrix)
+            start_index = start_index + self.hidden_sizes[i]*self.hidden_sizes[i+1]
+            end_index = end_index + self.hidden_sizes[i+1]
+            biases_vector = samples[start_index:end_index, :, :]
+            biases.append(biases_vector)
+            start_index = start_index + self.hidden_sizes[i+1]
+        # unpack output weight matrix and bias
+        end_index = end_index + self.hidden_sizes[-1]*self.output_size
+        weight_vector = samples[start_index:end_index, :, :]
+        weight_matrix = weight_vector.view(self.hidden_sizes[-1], self.output_size, no_samples, batch_size)
+        weights.append(weight_matrix)
+        start_index = start_index + self.hidden_sizes[-1]*self.output_size
+        biases_vector = samples[start_index:, :, :] # should reach the end of the parameters vector at this point
+        biases.append(biases_vector)
         return weights, biases
 
     def get_samples(self, L, no_samples, batch_size): # return samples of all the parameters, (no_params x no_samples x batch_size)
         z = Variable(torch.Tensor(self.no_params, no_samples, batch_size).normal_(0, 1).cuda())
-        params_samples = self.mean.expand(self.no_params, no_samples, batch_size) + torch.mm(L, z) ######## check this
+        print(L.size())
+        print(z.size())
+        #################################################################################################################
+        params_samples = self.mean.expand(self.no_params, no_samples, batch_size) + torch.matmul(L, z) ######## check this
 
-    def init_params(self):
-        self.no_params = self.count_params(self.hidden_sizes)
-        no_cov_params = self.no_params*(self.no_params + 1)/2
-        vec = np.zeros(no_cov_params)
+    def init_params(self, prior_init=False): 
+        no_cov_params = self.no_params*(self.no_params + 1)/2        
+        vec = np.zeros(int(no_cov_params))
         ind = 1
         for i in range(1, self.no_params + 1): 
             vec[ind-1] = -11.5 # initialise diagonals to tiny variance - the diagonals in logspace, the off diagonals in linear space
@@ -122,7 +149,28 @@ class FCVI_Net(nn.Module):
         self.cov_vector = nn.Parameter(torch.Tensor(vec)) 
         self.mean = nn.Parameter(torch.Tensor(self.no_params).normal_(0, 1e-1))
 
-    def count_params(self, hidden_sizes):
+    def init_prior(self):
+        self.prior_mean = Variable(torch.zeros(self.no_params).cuda()) # zero mean for all weights and biases
+        prior_variance_vector = np.ones(self.no_params)
+        # apply omega scaling to the weight matrices only
+        start_index = 0
+        end_index = 0
+        end_index = end_index + self.input_channels*self.input_size*self.hidden_sizes[0]
+        prior_variance_vector[start_index: end_index] = self.omega**2/(self.input_channels*self.input_size)
+        start_index = start_index + self.input_channels*self.input_size*self.hidden_sizes[0]
+        end_index = end_index + self.hidden_sizes[0]
+        start_index = start_index + self.hidden_sizes[0]
+        for i in range(len(self.hidden_sizes)-1): 
+            end_index = end_index + self.hidden_sizes[i]*self.hidden_sizes[i+1]
+            prior_variance_vector[start_index: end_index] = self.omega**2/self.hidden_sizes[i]
+            start_index = start_index + self.hidden_sizes[i]*self.hidden_sizes[i+1]
+            end_index = end_index + self.hidden_sizes[i+1]
+            start_index = start_index + self.hidden_sizes[i+1]        
+        end_index = end_index + self.hidden_sizes[-1]*self.output_size
+        prior_variance_vector[start_index: end_index] = self.omega**2/self.hidden_sizes[-1]
+        self.prior_variance_vector = Variable(torch.Tensor(prior_variance_vector).cuda()) # vector of prior variances
+
+    def count_params(self):
         no_params = self.input_channels*self.input_size*self.hidden_sizes[0] # first weight matrix
         for i in range(len(self.hidden_sizes)-1):
             no_params = no_params + self.hidden_sizes[i] + self.hidden_sizes[i]*self.hidden_sizes[i+1]

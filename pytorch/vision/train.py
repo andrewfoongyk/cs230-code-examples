@@ -227,7 +227,7 @@ def whole_dataset_train(model, optimizer, loss_fn, dataloader, metrics, params, 
         bias_units.append((0,i))
 
     # plotter = Weight_Plotter(model, units = units) # initialise weight plotter
-    weight_plot_save = Weight_Plot_Saver(args.model_dir)
+    # weight_plot_save = Weight_Plot_Saver(args.model_dir)
 
     # Use tqdm for progress bar
     with tqdm(total = no_epochs) as t:
@@ -242,7 +242,7 @@ def whole_dataset_train(model, optimizer, loss_fn, dataloader, metrics, params, 
             optimizer.zero_grad()
             loss.backward()
             
-            if params.model in ('mfvi', 'mfvi_prebias', 'weight_noise'):
+            if params.model in ('mfvi', 'mfvi_prebias', 'weight_noise', 'fcvi'):
                 # log to tensorboard
                 writer.add_scalar('Loss', loss, i)
                 # loss_writer.add_scalar('Train', loss, i)
@@ -289,16 +289,16 @@ def whole_dataset_train(model, optimizer, loss_fn, dataloader, metrics, params, 
                 label = ''
 
             # plot 
-            if i % 1000 == 0: # save images
-               plot_reg(model, args.data_dir, params, args.model_dir, epoch_number=i, pretrain=map_pretrain)
-               weight_plot_save.save(model, epoch=i, units=input_units, name=label +'input_weights', parameter='weights')
-               weight_plot_save.save(model, epoch=i, units=output_units, name=label +'output_weights', parameter='weights')
-               weight_plot_save.save(model, epoch=i, units=bias_units, name=label + 'biases', parameter='biases')
+            # if i % 1000 == 0: # save images
+            #    plot_reg(model, args.data_dir, params, args.model_dir, epoch_number=i, pretrain=map_pretrain)
+            #    weight_plot_save.save(model, epoch=i, units=input_units, name=label +'input_weights', parameter='weights')
+            #    weight_plot_save.save(model, epoch=i, units=output_units, name=label +'output_weights', parameter='weights')
+            #    weight_plot_save.save(model, epoch=i, units=bias_units, name=label + 'biases', parameter='biases')
 
-            if i == no_epochs-1:
-               weight_plot_save.save(model, epoch=i, units=input_units, name=label + 'input_weights', parameter='weights')
-               weight_plot_save.save(model, epoch=i, units=output_units, name=label + 'output_weights', parameter='weights')
-               weight_plot_save.save(model, epoch=i, units=bias_units, name=label + 'biases', parameter='biases')
+            # if i == no_epochs-1:
+            #    weight_plot_save.save(model, epoch=i, units=input_units, name=label + 'input_weights', parameter='weights')
+            #    weight_plot_save.save(model, epoch=i, units=output_units, name=label + 'output_weights', parameter='weights')
+            #    weight_plot_save.save(model, epoch=i, units=bias_units, name=label + 'biases', parameter='biases')
 
             # update the average loss
             loss_avg.update(loss.item())
@@ -431,7 +431,7 @@ if __name__ == '__main__':
     logging.info("Loading the datasets...")
 
     # Define model to draw prior samples from
-    if params.model in ('mfvi', 'map', 'fixed_mean_vi'): # use MFVI net to create prior draws for MAP net
+    if params.model in ('mfvi', 'map', 'fixed_mean_vi', 'fcvi'): # use MFVI net to create prior draws for MAP net, FCVI net...
         prior_model = net.MFVI_Net(params, prior_init=True).cuda() if params.cuda else net.MFVI_Net(params, prior_init=True)
     elif params.model == 'mfvi_prebias':
         prior_model = net.MFVI_Prebias_Net(params, prior_init=True).cuda() if params.cuda else net.MFVI_Prebias_Net(params, prior_init=True)
@@ -481,6 +481,9 @@ if __name__ == '__main__':
         # initialise the MAP model first
         print('Initialising MAP model')
         model = net.MAP_Net(params).cuda() if params.cuda else net.MAP_Net(params)
+    elif params.model == 'fcvi':
+        model = net.FCVI_Net(params)
+
     else:
         model = net.Net(params).cuda() if params.cuda else net.Net(params)
     print('cuda:{}'.format(params.cuda))

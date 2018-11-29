@@ -44,7 +44,7 @@ def plot_reg(model, data_dir, params, model_dir, epoch_number = 0, prior_draw=Fa
         test_inputs = test_inputs.cuda(async=True) 
     plt.figure(1)
     plt.clf() # clear figure
-    if not params.model in ('mfvi', 'mfvi_prebias', 'weight_noise', 'map', 'fixed_mean_vi'):
+    if not params.model in ('mfvi', 'mfvi_prebias', 'weight_noise', 'map', 'fixed_mean_vi', 'fcvi'):
         # standard max likelihood network
         test_outputs = model(test_inputs)
         # convert back to np array

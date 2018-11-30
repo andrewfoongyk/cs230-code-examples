@@ -21,6 +21,7 @@ from tensorboardX import SummaryWriter
 import time
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+import matplotlib.cm as cm
 import scipy.stats
 import math
 
@@ -90,29 +91,43 @@ class Weight_Plot_Saver(object):
         # create a new figure
         self.fig_weights, self.axis_weights = plt.subplots(1, 1)
         
-        # update the weight data to plot
-        weights, biases, priors = model.return_weights()       
-        prior_sd = priors[units[0][0]]
-        self.axis_weights.set_ylim([0, 10/np.sqrt(2*np.pi*(prior_sd)**2)]) 
-        if parameter == 'weights':
-            self.x_weights = np.linspace(-4*prior_sd, 4*prior_sd, 1000)
-        elif parameter == 'biases':
-            self.x_weights = np.linspace(-4, 4, 1000) # since bias variances do not scale with size of input to layer
+        if parameter in ('weights', 'biases'):
+            # update the weight data to plot
+            weights, biases, priors = model.return_weights()       
+            prior_sd = priors[units[0][0]]
+            self.axis_weights.set_ylim([0, 10/np.sqrt(2*np.pi*(prior_sd)**2)]) 
+            if parameter == 'weights':
+                self.x_weights = np.linspace(-4*prior_sd, 4*prior_sd, 1000)
+            elif parameter == 'biases':
+                self.x_weights = np.linspace(-4, 4, 1000) # since bias variances do not scale with size of input to layer
 
         if parameter == 'weights':
+            # print('starting the weights')
             # plot all the weights in units
             for i, u in enumerate(units):
+                # print(len(weights))
+                # print('layer:{}'.format(u[0]))
+                # print('row:{}'.format(u[1]))
+                # print('column:{}'.format(u[2]))
+                # print(weights[u[0]][0].shape)
                 mu = weights[u[0]][0][u[1]][u[2]] # [layer][mean/sd][weightrow][weightcol]
                 sigma = weights[u[0]][1][u[1]][u[2]]
                 y_weights = scipy.stats.norm.pdf(self.x_weights, mu, sigma)
                 self.axis_weights.plot(self.x_weights, y_weights, self.styles[i%6], linewidth=0.3)
+            # print('did the weights')
         elif parameter == 'biases':
+            # print('starting the biases')
             # plot all the biases in units
             for i, u in enumerate(units):
                 mu = biases[u[0]][0][u[1]] # [layer][mean/sd][biasrow]
                 sigma = biases[u[0]][1][u[1]]
                 y_weights = scipy.stats.norm.pdf(self.x_weights, mu, sigma)
                 self.axis_weights.plot(self.x_weights, y_weights, self.styles[i%6], linewidth=0.3)
+            # print('did the biases')
+        elif parameter == 'covariance': # for FCVI
+            self.axis_weights.imshow(np.abs(model.Sigma.cpu().detach().numpy()), interpolation='nearest', cmap=cm.Greys_r)
+        elif parameter == 'mean': # for FCVI
+            self.axis_weights.imshow(model.mean.cpu().detach().numpy(), interpolation='nearest', cmap=cm.Greys_r)
 
         # plot the prior 
         if plot_prior == True:
@@ -122,11 +137,12 @@ class Weight_Plot_Saver(object):
             elif parameter == 'biases': # under radford neal's prior scaling, we keep bias prior as standard normal always
                 y_prior = scipy.stats.norm.pdf(self.x_weights, 0, 1)
                 self.axis_weights.plot(self.x_weights, y_prior, 'k--', linewidth=1)
-                
+            
         # save to directory
         filepath = os.path.join(self.directory, name + '_epoch_' + str(epoch) + '.pdf')
         self.fig_weights.savefig(filepath)
         plt.close()
+
         
 def train(model, optimizer, loss_fn, dataloader, metrics, params):
     """Train the model on `num_steps` batches
@@ -226,7 +242,7 @@ def whole_dataset_train(model, optimizer, loss_fn, dataloader, metrics, params, 
         output_units.append((len(params.hidden_sizes), i, 0)) # change depending on no. of layers
         bias_units.append((0,i))
 
-    # plotter = Weight_Plotter(model, units = units) # initialise weight plotter
+    # plotter = Weight_Plotter(model, units = units) # initialise weight animation plotter
     weight_plot_save = Weight_Plot_Saver(args.model_dir)
 
     # Use tqdm for progress bar
@@ -293,11 +309,17 @@ def whole_dataset_train(model, optimizer, loss_fn, dataloader, metrics, params, 
                 weight_plot_save.save(model, epoch=i, units=input_units, name=label +'input_weights', parameter='weights')
                 weight_plot_save.save(model, epoch=i, units=output_units, name=label +'output_weights', parameter='weights')
                 weight_plot_save.save(model, epoch=i, units=bias_units, name=label + 'biases', parameter='biases')
+                if params.model == 'fcvi':
+                    weight_plot_save.save(model, epoch=i, units=None, name='covariance', parameter='covariance', plot_prior=False)
+                    #weight_plot_save.save(model, epoch=i, units=None, name='mean', parameter='mean', plot_prior=False)
 
             if i == no_epochs-1:
                 weight_plot_save.save(model, epoch=i, units=input_units, name=label + 'input_weights', parameter='weights')
                 weight_plot_save.save(model, epoch=i, units=output_units, name=label + 'output_weights', parameter='weights')
                 weight_plot_save.save(model, epoch=i, units=bias_units, name=label + 'biases', parameter='biases')
+                if params.model == 'fcvi':
+                    weight_plot_save.save(model, epoch=i, units=None, name='covariance', parameter='covariance', plot_prior=False)
+                    #weight_plot_save.save(model, epoch=i, units=None, name='mean', parameter='mean', plot_prior=False)
 
             # update the average loss
             loss_avg.update(loss.item())
@@ -541,7 +563,7 @@ if __name__ == '__main__':
     #plt.show()
     # plot results for regression task
     plot_reg(model, args.data_dir, params, args.model_dir, epoch_number=params.num_epochs)
-    # weight_plot_save.save(model, epoch=params.num_epochs)
+    weight_plot_save.save(model, epoch=params.num_epochs)
 
     # pr.disable()
     # pr.print_stats()

@@ -73,8 +73,9 @@ class FCVI_Net(nn.Module):
         samples = self.get_samples(self.L, no_samples, batch_size, shared_weights)
         # unpack weights and biases
         weights, biases = self.unpack_samples(samples, no_samples, batch_size)
-        self.weights = weights #### for printing
-        self.biases = biases
+        # self.weights = weights #### for printing
+        # self.biases = biases
+
         # forward propagate
         activations = x.expand(self.input_channels*self.input_size, -1) # expand in first layer
         for i in range(len(weights)-1): # all but the last weight matrix and bias
@@ -103,7 +104,95 @@ class FCVI_Net(nn.Module):
     def return_weights(self):
         """return the marginal statistics of the weights and biases of the network"""
         # return a list of lists - the first list goes through layers, and each item is a list that has means in 0th place and S.D.'s in 1st place
-    ##################### to do
+        weights = []
+        biases = []
+        priors = []
+
+        start_index = 0
+        end_index = 0  
+
+        diag_variances = torch.diag(self.Sigma)
+        diag_sd = torch.sqrt(diag_variances)
+
+        # unpack first weight matrix and bias
+        layer_weights = []
+        layer_biases = []
+        end_index = end_index + self.input_channels*self.input_size*self.hidden_sizes[0]
+        weight_mean_vector = self.mean[start_index:end_index]
+        weight_mean_matrix = weight_mean_vector.view(self.input_channels*self.input_size, self.hidden_sizes[0])
+        weight_sd_vector = diag_sd[start_index:end_index]
+        weight_sd_matrix = weight_sd_vector.view(self.input_channels*self.input_size, self.hidden_sizes[0])
+
+        start_index = start_index + self.input_channels*self.input_size*self.hidden_sizes[0]
+        end_index = end_index + self.hidden_sizes[0]
+
+        bias_mean_vector = self.mean[start_index:end_index]
+        bias_sd_vector = diag_sd[start_index:end_index]
+
+        layer_weights.append(weight_mean_matrix.cpu().detach().numpy())
+        layer_biases.append(bias_mean_vector.cpu().detach().numpy())
+        layer_weights.append(weight_sd_matrix.cpu().detach().numpy())
+        layer_biases.append(bias_sd_vector.cpu().detach().numpy())
+        weights.append(layer_weights)
+        biases.append(layer_biases)
+        n_input = self.input_channels*self.input_size
+        priors.append(self.omega/np.sqrt(n_input))
+
+        start_index = start_index + self.hidden_sizes[0]
+
+        for i in range(len(self.hidden_sizes)-1):
+            layer_weights = []
+            layer_biases = [] 
+            end_index = end_index + self.hidden_sizes[i]*self.hidden_sizes[i+1]
+
+            weight_mean_vector = self.mean[start_index:end_index]
+            weight_mean_matrix = weight_mean_vector.view(self.hidden_sizes[i], self.hidden_sizes[i+1])
+            weight_sd_vector = diag_sd[start_index:end_index]
+            weight_sd_matrix = weight_sd_vector.view(self.hidden_sizes[i], self.hidden_sizes[i+1])
+
+            start_index = start_index + self.hidden_sizes[i]*self.hidden_sizes[i+1]
+            end_index = end_index + self.hidden_sizes[i+1]
+
+            bias_mean_vector = self.mean[start_index:end_index]
+            bias_sd_vector = diag_sd[start_index:end_index]
+
+            layer_weights.append(weight_mean_matrix.cpu().detach().numpy())
+            layer_biases.append(bias_mean_vector.cpu().detach().numpy())
+            layer_weights.append(weight_sd_matrix.cpu().detach().numpy())
+            layer_biases.append(bias_sd_vector.cpu().detach().numpy())
+            weights.append(layer_weights)
+            biases.append(layer_biases)
+            n_input = self.hidden_sizes[i]
+            priors.append(self.omega/np.sqrt(n_input))
+
+            start_index = start_index + self.hidden_sizes[i+1]
+
+        # unpack output weight matrix and bias
+        layer_weights = []
+        layer_biases = []
+        end_index = end_index + self.hidden_sizes[-1]*self.output_size
+        #print('HEREREEEE')
+        
+        weight_mean_vector = self.mean[start_index:end_index]
+        weight_mean_matrix = weight_mean_vector.view(self.hidden_sizes[-1], self.output_size)
+        weight_sd_vector = diag_sd[start_index:end_index]
+        weight_sd_matrix = weight_sd_vector.view(self.hidden_sizes[-1], self.output_size)
+
+        start_index = start_index + self.hidden_sizes[-1]*self.output_size
+
+        bias_mean_vector = self.mean[start_index:] # should reach the end of the vector
+        bias_sd_vector = diag_sd[start_index:]
+
+        layer_weights.append(weight_mean_matrix.cpu().detach().numpy())
+        layer_biases.append(bias_mean_vector.cpu().detach().numpy())
+        layer_weights.append(weight_sd_matrix.cpu().detach().numpy())
+        layer_biases.append(bias_sd_vector.cpu().detach().numpy())
+        weights.append(layer_weights)
+        biases.append(layer_biases)
+        n_input = self.hidden_sizes[-1]
+        priors.append(self.omega/np.sqrt(n_input))
+
+        return weights, biases, priors
 
     def unpack_samples(self, samples, no_samples, batch_size):
         start_index = 0
@@ -1035,8 +1124,7 @@ class MFVI_Net(nn.Module):
                 if self.activation_name == 'prelu':
                     s = self.activation(s, self.prelu_weight)
                 else:
-                    s = F.relu(torch.tanh(s))
-                    ##########################s = self.activation(s) 
+                    s = self.activation(s) 
         if self.dataset == '1d_cosine' or self.dataset == 'prior_dataset': # make this more flexible
             # s has dimension (no_samples x batch_size x no_output=1)
             s = s.view(no_samples, -1) # (no_samples x batch_size)

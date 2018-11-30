@@ -34,6 +34,8 @@ class FCVI_Net(nn.Module):
             self.activation = F.prelu
         elif params.activation == 'sine':
             self.activation = torch.sin
+        elif params.activation == 'sigmoid':
+            self.activation = F.sigmoid
 
         # adjust input and output size depending on dataset used and read output noise
         if params.dataset == 'mnist':
@@ -57,27 +59,33 @@ class FCVI_Net(nn.Module):
         # initialise covariance (in vector form) and means
         self.init_params(prior_init)
 
-    def forward(self, x, no_samples):
+    def forward(self, x, no_samples, shared_weights=False): 
         batch_size = x.size()[0] # x has dimensions (batch_size x no_inputs)
         # use cov_vector to fill in L
-        L = torch.zeros(self.no_params, self.no_params)
-        L[np.tril_indices(self.no_params)] = self.cov_vector
+        L_init = torch.zeros(self.no_params, self.no_params).cuda()
+        L_init[np.tril_indices(self.no_params)] = self.cov_vector
         # exponentiate the diagonal
-        L_diag = torch.diag(L)
+        L_diag = torch.diag(L_init)
         L_diag_mat = torch.diag(L_diag)
-        self.L = L - L_diag_mat + torch.diag(torch.exp(L_diag)) # cholesky decomposition
-        self.Sigma = torch.mm(L, torch.t(L)) # covariance matrix
+        self.L = L_init - L_diag_mat + torch.diag(torch.exp(L_diag)) # cholesky decomposition
+        self.Sigma = torch.matmul(self.L, torch.t(self.L)) # covariance matrix
         # sample all parameters
-        samples = self.get_samples(L, no_samples, batch_size)
+        samples = self.get_samples(self.L, no_samples, batch_size, shared_weights)
         # unpack weights and biases
         weights, biases = self.unpack_samples(samples, no_samples, batch_size)
+        self.weights = weights #### for printing
+        self.biases = biases
         # forward propagate
-        activations = x
-        for i in range(len(weights)-1): # all but the last weight matrix and bias 
-            activities = torch.einsum('bi,iosb->osb', (activations, weights[i])) + biases[i]
+        activations = x.expand(self.input_channels*self.input_size, -1) # expand in first layer
+        for i in range(len(weights)-1): # all but the last weight matrix and bias
+            if i == 0: # first layer 
+                activities = torch.einsum('ib,iosb->osb', (activations, weights[i])) + biases[i]
+            else: 
+                activities = torch.einsum('isb,iosb->osb', (activations, weights[i])) + biases[i]
             activations = self.activation(activities) # apply nonlinearity
-        output = torch.einsum('bi,iosb->osb', (activations, weights[-1])) + biases[-1] # final linear layer and bias
-        output = output.permute(1,2,0) # get indeces into 'standard form' - (samples x batch_size x output_dims)
+        output = torch.einsum('isb,iosb->osb', (activations, weights[-1])) + biases[-1] # final linear layer and bias
+        output = output.view(no_samples, batch_size)
+        return output
 
     def get_KL_term(self):
         # calculate KL divergence between q and the prior for the entire network
@@ -86,7 +94,7 @@ class FCVI_Net(nn.Module):
         logdet_q = 2*torch.sum(torch.log(torch.diag(self.L)))
         logdet_term = logdet_prior - logdet_q
         prior_cov_inv = torch.diag(1/self.prior_variance_vector)
-        trace_term = torch.trace(torch.mm(prior_cov_inv, self.Sigma)) # is there a more efficient way to do this?
+        trace_term = torch.trace(torch.matmul(prior_cov_inv, self.Sigma)) # is there a more efficient way to do this?
         mu_diff = self.prior_mean - self.mean
         quad_term = torch.matmul(mu_diff, torch.matmul(prior_cov_inv, mu_diff)) # and this?
         kl = 0.5*(const_term + logdet_term + trace_term + quad_term)
@@ -132,22 +140,27 @@ class FCVI_Net(nn.Module):
         biases.append(biases_vector)
         return weights, biases
 
-    def get_samples(self, L, no_samples, batch_size): # return samples of all the parameters, (no_params x no_samples x batch_size)
-        z = Variable(torch.Tensor(self.no_params, no_samples, batch_size).normal_(0, 1).cuda())
-        print(L.size())
-        print(z.size())
-        #################################################################################################################
-        params_samples = self.mean.expand(self.no_params, no_samples, batch_size) + torch.matmul(L, z) ######## check this
+    def get_samples(self, L, no_samples, batch_size, shared_weights=False): # return samples of all the parameters, (no_params x no_samples x batch_size)
+        if shared_weights == True:
+            z = Variable(torch.Tensor(self.no_params, no_samples).normal_(0, 1).cuda())
+            z = z.expand(batch_size, -1, -1)
+            z = z.permute(1,2,0)
+        else:
+            z = Variable(torch.Tensor(self.no_params, no_samples, batch_size).normal_(0, 1).cuda())
+        means = self.mean.expand(no_samples, batch_size, -1)
+        means = means.permute(2,0,1)
+        params_samples = means + torch.einsum('ab,bcd->acd', (L, z)) ######## check this
+        return params_samples
 
     def init_params(self, prior_init=False): 
         no_cov_params = self.no_params*(self.no_params + 1)/2        
         vec = np.zeros(int(no_cov_params))
         ind = 1
         for i in range(1, self.no_params + 1): 
-            vec[ind-1] = -11.5 # initialise diagonals to tiny variance - the diagonals in logspace, the off diagonals in linear space
+            vec[ind-1] = -3 # initialise diagonals to tiny variance - the diagonals in logspace, the off diagonals in linear space
             ind += (i+1)
-        self.cov_vector = nn.Parameter(torch.Tensor(vec)) 
-        self.mean = nn.Parameter(torch.Tensor(self.no_params).normal_(0, 1e-1))
+        self.cov_vector = nn.Parameter(torch.Tensor(vec).cuda()) 
+        self.mean = nn.Parameter(torch.Tensor(self.no_params).normal_(0, 1e-1).cuda())
 
     def init_prior(self):
         self.prior_mean = Variable(torch.zeros(self.no_params).cuda()) # zero mean for all weights and biases
@@ -983,6 +996,8 @@ class MFVI_Net(nn.Module):
             self.activation = F.prelu
         elif params.activation == 'sine':
             self.activation = torch.sin
+        elif params.activation == 'sigmoid':
+            self.activation = F.sigmoid
         
          # adjust input and output size depending on dataset used and read output noise
         if params.dataset == 'mnist':
@@ -1020,7 +1035,8 @@ class MFVI_Net(nn.Module):
                 if self.activation_name == 'prelu':
                     s = self.activation(s, self.prelu_weight)
                 else:
-                    s = self.activation(s) 
+                    s = F.relu(torch.tanh(s))
+                    ##########################s = self.activation(s) 
         if self.dataset == '1d_cosine' or self.dataset == 'prior_dataset': # make this more flexible
             # s has dimension (no_samples x batch_size x no_output=1)
             s = s.view(no_samples, -1) # (no_samples x batch_size)

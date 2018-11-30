@@ -10,7 +10,7 @@ class Prior_Dataset_Builder(object):
     """build and save 1D dataset by drawing from model prior"""
     def __init__(self, model, params, directory):
         N = params.prior_dataset_size
-        x = np.linspace(-2, 2, 10000)
+        x = np.linspace(-4, 4, 10000)
         x = torch.FloatTensor(x)
         if params.cuda:
             x = x.cuda(async=True) 
@@ -34,6 +34,7 @@ class Prior_Dataset_Builder(object):
         # pickle the dataset 
         with open(filename, 'wb') as f:
             pickle.dump([data, x_line, y_line], f)
+    
 
         # unpickle the dataset
         with open(filename, 'rb') as f:

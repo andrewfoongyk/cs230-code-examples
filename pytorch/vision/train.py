@@ -227,7 +227,7 @@ def whole_dataset_train(model, optimizer, loss_fn, dataloader, metrics, params, 
         bias_units.append((0,i))
 
     # plotter = Weight_Plotter(model, units = units) # initialise weight plotter
-    # weight_plot_save = Weight_Plot_Saver(args.model_dir)
+    weight_plot_save = Weight_Plot_Saver(args.model_dir)
 
     # Use tqdm for progress bar
     with tqdm(total = no_epochs) as t:
@@ -288,17 +288,16 @@ def whole_dataset_train(model, optimizer, loss_fn, dataloader, metrics, params, 
             else:
                 label = ''
 
-            # plot 
-            # if i % 1000 == 0: # save images
-            #    plot_reg(model, args.data_dir, params, args.model_dir, epoch_number=i, pretrain=map_pretrain)
-            #    weight_plot_save.save(model, epoch=i, units=input_units, name=label +'input_weights', parameter='weights')
-            #    weight_plot_save.save(model, epoch=i, units=output_units, name=label +'output_weights', parameter='weights')
-            #    weight_plot_save.save(model, epoch=i, units=bias_units, name=label + 'biases', parameter='biases')
+            if i % 1000 == 0: # save images
+                plot_reg(model, args.data_dir, params, args.model_dir, epoch_number=i, pretrain=map_pretrain)
+                weight_plot_save.save(model, epoch=i, units=input_units, name=label +'input_weights', parameter='weights')
+                weight_plot_save.save(model, epoch=i, units=output_units, name=label +'output_weights', parameter='weights')
+                weight_plot_save.save(model, epoch=i, units=bias_units, name=label + 'biases', parameter='biases')
 
-            # if i == no_epochs-1:
-            #    weight_plot_save.save(model, epoch=i, units=input_units, name=label + 'input_weights', parameter='weights')
-            #    weight_plot_save.save(model, epoch=i, units=output_units, name=label + 'output_weights', parameter='weights')
-            #    weight_plot_save.save(model, epoch=i, units=bias_units, name=label + 'biases', parameter='biases')
+            if i == no_epochs-1:
+                weight_plot_save.save(model, epoch=i, units=input_units, name=label + 'input_weights', parameter='weights')
+                weight_plot_save.save(model, epoch=i, units=output_units, name=label + 'output_weights', parameter='weights')
+                weight_plot_save.save(model, epoch=i, units=bias_units, name=label + 'biases', parameter='biases')
 
             # update the average loss
             loss_avg.update(loss.item())
@@ -493,7 +492,7 @@ if __name__ == '__main__':
         print(type(param.data), param.size())
 
     # fetch loss function and metrics
-    if params.model in ('mfvi', 'mfvi_prebias', 'weight_noise', 'fixed_mean_vi'):
+    if params.model in ('mfvi', 'mfvi_prebias', 'weight_noise', 'fixed_mean_vi', 'fcvi'):
         if params.dataset in ('1d_cosine', 'prior_dataset'): # regression
             loss_fn = net.MFVI_regression_loss_fn
         else: # classification

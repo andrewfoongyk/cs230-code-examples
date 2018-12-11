@@ -1,40 +1,129 @@
 import numpy as np
 import torch
+from tqdm import tqdm
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import pickle
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 from copy import deepcopy
+import os
+
+def plot_regression(model, samples, directory):
+    plt.figure()
+    plt.xlabel('$x$')
+    plt.ylabel('$y$')
+    axes = plt.gca()
+    axes.set_xlim([-3, 3])
+    axes.set_ylim([-3, 3])
+    plt.plot(data_load[:,0], data_load[:,1], '+k')
+    N = 1000
+    x_lower = -6
+    x_upper = 8
+    x_values = np.linspace(x_lower, x_upper, N)
+    test_inputs = torch.FloatTensor(x_values).cuda(async=True)
+
+    # plot all the samples
+    no_samp = len(samples)
+    all_test_outputs = np.zeros((no_samp, N))
+    for i, sample in enumerate(samples):
+        for j, param in enumerate(model.parameters()):
+            param.data = sample[j] # fill in the model with these weights
+        # plot regression
+        test_outputs = model(test_inputs)
+        # convert back to np array
+        test_outputs = test_outputs.data.cpu().numpy()
+        test_outputs = test_outputs.reshape(N)
+        plt.plot(x_values, test_outputs, linewidth=0.3)
+        # save data for ensemble mean and s.d. calculation
+        all_test_outputs[i,:] = test_outputs
+
+    # calculate mean and variance
+    mean = np.mean(all_test_outputs, 0)
+    variance = model.noise_variance + np.mean(all_test_outputs**2, 0) - mean**2
+
+    plt.plot(x_values, mean, color='b')
+    plt.fill_between(x_values, mean + np.sqrt(variance), mean - np.sqrt(variance), color='b', alpha=0.3)
+
+    filepath = os.path.join(directory, 'HMC_regression.pdf')
+    plt.savefig(filepath)
+    plt.close()
+
+def plot_covariance(hidden_sizes, samples, directory):
+    # plot the empirical covariance matrix (use unbiased estimator?) and the correlation matrix
+    
+    # calculate number of parameters in the network
+    no_params = hidden_sizes[0] # first weight matrix
+    for i in range(len(hidden_sizes)-1):
+        no_params = no_params + hidden_sizes[i] + hidden_sizes[i]*hidden_sizes[i+1]
+    no_params = no_params + hidden_sizes[-1] + hidden_sizes[-1] + 1 # final weight matrix and last 2 biases
+
+    sampled_parameters = np.zeros((no_params, len(samples)))
+    for i, sample in enumerate(samples):
+        # send parameters to numpy arrays and pack the parameters into a vector
+        start_index = 0
+        for j, param in enumerate(sample):
+            ################################################# might have to rearrange in nice order...
+            param = param.cpu().detach().numpy()
+            param = param.reshape(-1) # flatten into a vector
+            end_index = start_index + param.size
+            sampled_parameters[start_index:end_index, i] = param # fill into array
+            start_index = start_index + param.size
+    
+    #print('sampled_parameters: {}'.format(sampled_parameters))
+    # calculate sample mean
+    sample_mean = np.mean(sampled_parameters, axis=1)
+    sample_mean = sample_mean.reshape(-1, 1) # numpy broadcasting thing
+    #print(sample_mean.shape)
+    #sample_mean = np.tile(sample_mean.transpose(), (len(samples), 1))
+    centered_samples = sampled_parameters - sample_mean
+    #print('centered: {}'.format(centered_samples))
+
+    # calculate empirical covariances
+    cov = np.zeros((no_params, no_params))
+    for i in range(len(samples)):
+        cov = cov + np.outer(centered_samples[:,i], centered_samples[:,i])
+        #print('cov contribution: {}'.format(np.outer(centered_samples[:,i], centered_samples[:,i])))
+    cov = cov/len(samples) # max likelihood estimator of covariance
+    fig, ax = plt.subplots()
+    im = ax.imshow(cov , interpolation='nearest', cmap=cm.Greys_r)
+    filepath = os.path.join(directory, 'covariance.pdf')
+    fig.savefig(filepath)
+    plt.close()
 
 class MLP(nn.Module):
-    def __init__(self):
+    def __init__(self, noise_variance, hidden_sizes, omega):
         super(MLP, self).__init__()
-        self.noise_variance = 0.01
-        self.linears = nn.ModuleList([nn.Linear(1,1)])
-        # self.linears.extend([MAP_Linear_Layer(self.hidden_sizes[i], self.hidden_sizes[i+1]) for i in range(0, len(self.hidden_sizes)-1)])
-        # self.linears.append(MAP_Linear_Layer(self.hidden_sizes[-1], self.output_size))
+        self.omega = omega
+        self.noise_variance = noise_variance
+        self.hidden_sizes = hidden_sizes
+        self.linears = nn.ModuleList([nn.Linear(1, self.hidden_sizes[0])])
+        self.linears.extend([nn.Linear(self.hidden_sizes[i], self.hidden_sizes[i+1]) for i in range(0, len(self.hidden_sizes)-1)])
+        self.linears.append(nn.Linear(self.hidden_sizes[-1], 1))
         
     def forward(self, x):
-        x = x.view(100, 1)
-        x = self.linears[0](x)
+        batch_size = x.size()[0]
+        x = x.view(batch_size, 1)
+        for i, l in enumerate(self.linears):
+            x = l(x)
+            if i < len(self.linears) - 1:
+                x = F.relu(x) 
         return x
 
-    def get_U(self, inputs, labels) :
+    def get_U(self, inputs, labels):
         outputs = self.forward(inputs)
+        labels = labels.reshape(labels.size()[0], 1)
         L2_term = 0
-        for i, l in enumerate(self.linears):
-            single_layer_L2 = 0.5*(torch.sum(l.weight**2) + torch.sum(l.bias**2))
+        for i, l in enumerate(self.linears): # identity covariance prior --> add Neal's scaling later
+            n_inputs = l.weight.size()[0]
+            single_layer_L2 = 0.5*(n_inputs/(self.omega**2))*(torch.sum(l.weight**2) + torch.sum(l.bias**2))
             L2_term = L2_term + single_layer_L2
         error = (1/(2*self.noise_variance))*torch.sum((labels - outputs)**2)
-        U = error + L2_term
-        print('U: {}'.format(U))
+        U = error + 0.01*L2_term
         return U
 
-"""This version of HMC follows https://arxiv.org/pdf/1206.1901.pdf. Identity mass matrix used.
-  Args:
-
-  """
+"""This version of HMC follows https://arxiv.org/pdf/1206.1901.pdf. Identity mass matrix used"""
 
 class HMC_Sampler:
     def __init__(self, inputs, targets, step_size = 0.002, num_steps = 20, no_samples = 20000, burn_in = 1000, thinning = 1):
@@ -45,25 +134,37 @@ class HMC_Sampler:
         self.inputs = inputs
         self.targets = targets
         self.thinning = thinning
+        self.no_accept = 0
 
     def get_samples(self, model):
         """run the HMC sampler and save the samples"""
         print('Beginning burn-in phase of {} samples'.format(self.burn_in))
         # don't save the burn-in samples
-        for _ in range(self.burn_in):
+        for i in tqdm(range(self.burn_in)):
             new_parameters = self.HMC_transition(model)
-            # print('new parameters:{}'.format(new_parameters))
+            if i%100 == 0:
+                if i != 0:
+                    print('Acceptance rate: {}%'.format(self.no_accept))
+                self.no_accept = 0
             for i, param in enumerate(model.parameters()):
                 param.data = new_parameters[i]    
-        print('Burn-in phase finished, collecting {} samples.'.format(self.no_samples))  
+        print('Burn-in phase finished, collecting {} samples with thinning of {}.'.format(self.no_samples, self.thinning))  
         samples = []
-        for i in range(self.no_samples):
+        for i in tqdm(range(self.no_samples)):
+            # get new parameters and use them to replace the old ones
             new_parameters = self.HMC_transition(model)
             for j, param in enumerate(model.parameters()):
-                param.data = new_parameters[j]
-                samples.append(new_parameters)
+                param.data = new_parameters[j] 
+
+            # save the new parameters
+            if i%self.thinning == 0:
+                    samples.append(deepcopy(new_parameters))
+            
+            # print the acceptance rate
             if i%100 == 0:
-                print('Sample {}'.format(i))
+                if i != 0:
+                    print('Acceptance rate: {}%'.format(self.no_accept))
+                self.no_accept = 0
         return samples
         print('Done collecting samples')
 
@@ -75,35 +176,31 @@ class HMC_Sampler:
             param_size = param.size()
             # independent standard normal variates for corresponding momenta
             p.append(torch.cuda.FloatTensor(param_size).normal_(0, 1)) 
-
-        #print(p)
        
         # get gradients of U wrt parameters q
         U = model.get_U(self.inputs, self.targets) # get log posterior (up to constant)
-        # print('U:{}'.format(U))
-        start_U = U # save the starting potential energy
+        start_U = U.clone() # save the starting potential energy
 
-        K = torch.cuda.FloatTensor(1).fill_(0) # a zero 
+        # save the starting kinetic energy
+        start_K = torch.cuda.FloatTensor(1).fill_(0) # a zero 
         for momentum in p:
-            K = K + torch.sum(momentum**2)/2
-        start_K = K # save the starting kinetic energy
+            start_K = start_K + torch.sum(momentum**2)/2
 
-        #print(start_K)
+        #print('start p: {}'.format(p))
 
         U.backward() 
 
         # make half step for momentum at the beginning
         for i, momentum in enumerate(p):
-            print('momentum: {}'.format(momentum))
-            print('gradient: {}'.format(list(model.parameters())[i].grad.data))
-            momentum = momentum - self.step_size*list(model.parameters())[i].grad.data/2
-            print('momentum after: {}'.format(momentum))
+            momentum += - self.step_size*list(model.parameters())[i].grad.data/2
+
+        #print('end p:{}'.format(p))
 
         # alternate full steps for position and momentum
         for i in range(self.num_steps):            
             # make a full step for the position
-            for i, param in enumerate(model.parameters()):
-                param.data += self.step_size*p[i]
+            for l, param in enumerate(model.parameters()):
+                param.data += self.step_size*p[l]
 
             # zero gradients of U wrt parameters q
             for _, param in enumerate(model.parameters()): 
@@ -112,75 +209,101 @@ class HMC_Sampler:
             U = model.get_U(self.inputs, self.targets) # get log posterior (up to constant)
             U.backward() 
 
-            # make a full step for the momentum, except at end of trajectory
+            # make a full step for the momentum, except at end of trajectory <-- check this ################
             if not (i == (self.num_steps-1)):
-                for i, momentum in enumerate(p):
-                    momentum = momentum - self.step_size*list(model.parameters())[i].grad.data
+                for j, momentum in enumerate(p):
+                    momentum += - self.step_size*list(model.parameters())[j].grad.data
 
         # make a half step for momentum at the end
         for i, momentum in enumerate(p):
-            momentum = momentum - self.step_size*list(model.parameters())[i].grad.data/2
+            momentum += - self.step_size*list(model.parameters())[i].grad.data/2
 
         # negate momentum at the end of trajectory to make the proposal symmetric
-        for _, momentum in enumerate(p):
-            momentum = -momentum # can probably skip this without effect
+        # can probably skip this without effect
 
         # evaluate potential and kinetic energies at end of trajectory
         end_U = model.get_U(self.inputs, self.targets)
-        #end_K = self.get_K(p)
 
-        K = torch.cuda.FloatTensor(1).fill_(0) # a zero 
+        end_K = torch.cuda.FloatTensor(1).fill_(0) # a zero 
         for momentum in p:
-            K = K + torch.sum(momentum**2)/2
-        end_K = K # save the starting kinetic energy
+            end_K = end_K + torch.sum(momentum**2)/2
+
+        # zero gradients of U wrt parameters q
+        for _, param in enumerate(model.parameters()): 
+            param.grad.data.zero_()
 
         # Accept or reject the state at end of trajectory, returning either the position 
         # at the end of the trajectory or the initial position
 
-        print(start_U) 
-        print(end_U)
-        print(start_U - end_U + start_K - end_K)
-
         if np.random.uniform(0, 1) < torch.exp(start_U - end_U + start_K - end_K).cpu().detach().numpy():
-            print('accept')
-            #print(list(model.parameters()))
+            self.no_accept = self.no_accept + 1
             return list(model.parameters()) # accept
         else:
-            print('reject')
-            #print(saved_params)
             return saved_params # reject
 
 
 if __name__ == "__main__":
 
+    # set RNG
+    np.random.seed(0) # 0
+    torch.manual_seed(230) #  230
+
+    # hyperparameters
+    noise_variance = 0.01
+    hidden_sizes = [50]
+    omega = 4
+
+    burn_in = 1000
+    no_samples = 5000
+    no_saved_samples = 32
+    step_size = 0.002
+    num_steps = 10
+
+    directory = './/experiments//1d_cosine_separated'
+
+    # save text file with hyperparameters
+    file = open(directory + '/hyperparameters.txt','w') 
+    file.write('noise_variance: {} \n'.format(noise_variance))
+    file.write('hidden_sizes: {} \n'.format(hidden_sizes))  
+    file.write('omega: {} \n'.format(omega))   
+    file.write('burn_in: {} \n'.format(burn_in))
+    file.write('no_samples: {} \n'.format(no_samples)) 
+    file.write('no_saved_samples: {} \n'.format(no_saved_samples))
+    file.write('step_size: {} \n'.format(step_size))
+    file.write('num_steps: {} \n'.format(num_steps))         
+    file.close() 
+
     # model
-    net = MLP()
+    net = MLP(noise_variance, hidden_sizes, omega)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     # Assume that we are on a CUDA machine, then this should print a CUDA device:
     print(device)
     net.to(device)
-    print(list(net.parameters()))
+    for param in net.parameters():
+        print(type(param.data), param.size())
 
     # get dataset
     # load 1d_cosine dataset
-    with open('..//vision//data//1D_COSINE//1d_linear.pkl', 'rb') as f:
+    with open('..//vision//data//1D_COSINE//1d_cosine_separated.pkl', 'rb') as f:
             data_load = pickle.load(f)
 
-    # plot the dataset
-    plt.figure()
-    plt.plot(data_load[:,0], data_load[:,1], '+k')
-    plt.show()
+    #data_load = data_load[0] # just the points not the line
 
     x_train = torch.Tensor(data_load[:,0]).cuda()
     y_train = torch.Tensor(data_load[:,1]).cuda()
 
-    # HMC sample 
-    sampler = HMC_Sampler(inputs = x_train, targets = y_train, step_size = 0.0001, num_steps = 10, no_samples = 400, burn_in = 200, thinning = 1)
+    # HMC sample  
+    thinning = int(np.ceil(no_samples/no_saved_samples))
+    sampler = HMC_Sampler(inputs = x_train, targets = y_train, step_size = step_size, num_steps = num_steps, 
+        no_samples = no_samples, burn_in = burn_in, thinning=thinning)
     samples = sampler.get_samples(net)
 
-    for _, param in enumerate(net.parameters()):
-        print(param)
+    # plot and save plot of network output
+    plot_regression(net, samples, directory)
 
-    # print(samples)
-    # plot network output
+    # plot empirical covariance
+    plot_covariance(hidden_sizes, samples, directory)    
+
+
+
 

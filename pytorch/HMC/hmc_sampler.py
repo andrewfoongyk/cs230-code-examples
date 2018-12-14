@@ -10,7 +10,7 @@ import matplotlib.cm as cm
 from copy import deepcopy
 import os
 
-def plot_regression(model, samples, directory):
+def plot_regression(model, samples, directory, no_plot_samples):
     plt.figure()
     plt.xlabel('$x$')
     plt.ylabel('$y$')
@@ -23,6 +23,12 @@ def plot_regression(model, samples, directory):
     x_upper = 8
     x_values = np.linspace(x_lower, x_upper, N)
     test_inputs = torch.FloatTensor(x_values).cuda(async=True)
+
+    # subsample for plotting only
+    indeces = np.arange(0, len(samples))
+    subsampled_indeces = np.random.choice(indeces, no_plot_samples, replace=False)
+    subsampled_indeces = subsampled_indeces.astype(int)
+    samples = [samples[i] for i in subsampled_indeces]
 
     # plot all the samples
     no_samp = len(samples)
@@ -63,32 +69,42 @@ def plot_covariance(hidden_sizes, samples, directory):
     for i, sample in enumerate(samples):
         # send parameters to numpy arrays and pack the parameters into a vector
         start_index = 0
-        for j, param in enumerate(sample):
-            ################################################# might have to rearrange in nice order...
+        for _, param in enumerate(sample):
+            if len(param.size()) > 1:
+                param = torch.t(param) # nn.Linear does a transpose for some reason, so undo this
             param = param.cpu().detach().numpy()
             param = param.reshape(-1) # flatten into a vector
             end_index = start_index + param.size
             sampled_parameters[start_index:end_index, i] = param # fill into array
             start_index = start_index + param.size
     
-    #print('sampled_parameters: {}'.format(sampled_parameters))
     # calculate sample mean
     sample_mean = np.mean(sampled_parameters, axis=1)
     sample_mean = sample_mean.reshape(-1, 1) # numpy broadcasting thing
-    #print(sample_mean.shape)
-    #sample_mean = np.tile(sample_mean.transpose(), (len(samples), 1))
     centered_samples = sampled_parameters - sample_mean
-    #print('centered: {}'.format(centered_samples))
 
     # calculate empirical covariances
     cov = np.zeros((no_params, no_params))
     for i in range(len(samples)):
         cov = cov + np.outer(centered_samples[:,i], centered_samples[:,i])
-        #print('cov contribution: {}'.format(np.outer(centered_samples[:,i], centered_samples[:,i])))
     cov = cov/len(samples) # max likelihood estimator of covariance
+
     fig, ax = plt.subplots()
-    im = ax.imshow(cov , interpolation='nearest', cmap=cm.Greys_r)
+    im = ax.imshow(np.abs(cov) , interpolation='nearest', cmap=cm.Greys_r)
     filepath = os.path.join(directory, 'covariance.pdf')
+    fig.savefig(filepath)
+    plt.close()
+
+    # plot correlation matrix using cov matrix estimate
+    variance_vector = np.diag(cov)
+    sd_vector = np.sqrt(variance_vector)
+    outer_prod = np.outer(sd_vector, sd_vector)
+    correlations = cov/outer_prod
+
+    fig, ax = plt.subplots()
+    im = ax.imshow(correlations , interpolation='nearest')
+    fig.colorbar(im)
+    filepath = os.path.join(directory, 'correlation.pdf')
     fig.savefig(filepath)
     plt.close()
 
@@ -101,6 +117,15 @@ class MLP(nn.Module):
         self.linears = nn.ModuleList([nn.Linear(1, self.hidden_sizes[0])])
         self.linears.extend([nn.Linear(self.hidden_sizes[i], self.hidden_sizes[i+1]) for i in range(0, len(self.hidden_sizes)-1)])
         self.linears.append(nn.Linear(self.hidden_sizes[-1], 1))
+
+        # ################ custom initialisation
+        # self.linears[0].weight.data = torch.Tensor([[-1.414]])
+        # self.linears[0].bias.data = torch.Tensor([0])
+        # self.linears[1].weight.data = torch.Tensor([[-1.414]])
+        # self.linears[1].bias.data = torch.Tensor([2])
+        # ################
+
+        print(self.linears)
         
     def forward(self, x):
         batch_size = x.size()[0]
@@ -165,8 +190,8 @@ class HMC_Sampler:
                 if i != 0:
                     print('Acceptance rate: {}%'.format(self.no_accept))
                 self.no_accept = 0
-        return samples
         print('Done collecting samples')
+        return samples 
 
     def HMC_transition(self, model):
         """perform one transition of the markov chain"""
@@ -186,15 +211,11 @@ class HMC_Sampler:
         for momentum in p:
             start_K = start_K + torch.sum(momentum**2)/2
 
-        #print('start p: {}'.format(p))
-
         U.backward() 
 
         # make half step for momentum at the beginning
         for i, momentum in enumerate(p):
             momentum += - self.step_size*list(model.parameters())[i].grad.data/2
-
-        #print('end p:{}'.format(p))
 
         # alternate full steps for position and momentum
         for i in range(self.num_steps):            
@@ -253,25 +274,16 @@ if __name__ == "__main__":
     hidden_sizes = [50]
     omega = 4
 
-    burn_in = 1000
-    no_samples = 5000
-    no_saved_samples = 32
-    step_size = 0.002
+    burn_in = 10000
+    no_samples = 40000
+    no_saved_samples = 40000
+    no_plot_samples = 32
+    step_size = 0.0015
     num_steps = 10
 
-    directory = './/experiments//1d_cosine_separated'
-
-    # save text file with hyperparameters
-    file = open(directory + '/hyperparameters.txt','w') 
-    file.write('noise_variance: {} \n'.format(noise_variance))
-    file.write('hidden_sizes: {} \n'.format(hidden_sizes))  
-    file.write('omega: {} \n'.format(omega))   
-    file.write('burn_in: {} \n'.format(burn_in))
-    file.write('no_samples: {} \n'.format(no_samples)) 
-    file.write('no_saved_samples: {} \n'.format(no_saved_samples))
-    file.write('step_size: {} \n'.format(step_size))
-    file.write('num_steps: {} \n'.format(num_steps))         
-    file.close() 
+    directory = './/experiments//1d_cosine_separated_gaussian'
+    #data_location = './/experiments//2_points_init//prior_dataset.pkl'
+    data_location = '..//vision//data//1D_COSINE//1d_cosine_separated.pkl'
 
     # model
     net = MLP(noise_variance, hidden_sizes, omega)
@@ -283,8 +295,7 @@ if __name__ == "__main__":
         print(type(param.data), param.size())
 
     # get dataset
-    # load 1d_cosine dataset
-    with open('..//vision//data//1D_COSINE//1d_cosine_separated.pkl', 'rb') as f:
+    with open(data_location, 'rb') as f:
             data_load = pickle.load(f)
 
     #data_load = data_load[0] # just the points not the line
@@ -296,13 +307,33 @@ if __name__ == "__main__":
     thinning = int(np.ceil(no_samples/no_saved_samples))
     sampler = HMC_Sampler(inputs = x_train, targets = y_train, step_size = step_size, num_steps = num_steps, 
         no_samples = no_samples, burn_in = burn_in, thinning=thinning)
-    samples = sampler.get_samples(net)
+    samples = sampler.get_samples(net) 
+    no_saved_samples = len(samples) # the actual number of samples saved
+
+    # pickle the samples
+    filename = directory + '//HMC_samples'
+    outfile = open(filename, 'wb')
+    pickle.dump(samples, outfile)
+    outfile.close()
 
     # plot and save plot of network output
-    plot_regression(net, samples, directory)
+    plot_regression(net, samples, directory, no_plot_samples)
 
     # plot empirical covariance
-    plot_covariance(hidden_sizes, samples, directory)    
+    plot_covariance(hidden_sizes, samples, directory)   
+
+    # save text file with hyperparameters
+    file = open(directory + '/hyperparameters.txt','w') 
+    file.write('noise_variance: {} \n'.format(noise_variance))
+    file.write('hidden_sizes: {} \n'.format(hidden_sizes))  
+    file.write('omega: {} \n'.format(omega))   
+    file.write('burn_in: {} \n'.format(burn_in))
+    file.write('no_samples: {} \n'.format(no_samples)) 
+    file.write('no_saved_samples: {} \n'.format(no_saved_samples))
+    file.write('no_plot_samples: {} \n'.format(no_plot_samples))
+    file.write('step_size: {} \n'.format(step_size))
+    file.write('num_steps: {} \n'.format(num_steps))         
+    file.close()  
 
 
 

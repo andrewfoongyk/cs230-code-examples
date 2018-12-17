@@ -36,6 +36,7 @@ class Gaussian_fitter():
                 param = param.cpu().detach().numpy()
                 param = param.reshape(-1) # flatten into a vector
                 end_index = start_index + param.size
+                #import pdb; pdb.set_trace()
                 self.sampled_parameters[start_index:end_index, i] = param # fill into array
                 start_index = start_index + param.size
 
@@ -182,8 +183,8 @@ class Gaussian_fitter():
         # # plot on top of original samples as a sanity check 
         # plt.figure()
         # # plot original
-        # theta1 = 113
-        # theta2 = 150
+        # theta1 = 12
+        # theta2 = 13
         # sample1 = truncated_samples[theta1, :]
         # sample2 = truncated_samples[theta2, :]
         # # plot
@@ -325,18 +326,18 @@ if __name__ == "__main__":
     np.random.seed(0) # 0
     torch.manual_seed(230) #  230
 
-    directory = './/experiments//1d_cosine_separated_gaussian'
+    directory = './/experiments//1d_cosine_separated_deep'
     # hyperparameters
     noise_variance = 0.01
-    hidden_sizes = [50]
+    hidden_sizes = [50, 50]
     omega = 4
 
-    burn_in = 10000
-    no_samples = 20000
-    no_saved_samples = 20000
+    burn_in = 100
+    no_samples = 400
+    no_saved_samples = 400
     no_plot_samples = 32
-    step_size = 0.0015
-    num_steps = 10
+    step_size = [0.001, 0.003]
+    num_steps = [5, 15]
 
     with open(directory + '//HMC_samples', 'rb') as f:
                 samples = pickle.load(f)

@@ -8,7 +8,9 @@ import pickle
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from copy import deepcopy
+from tensorboardX import SummaryWriter
 import os
+import cProfile
 
 def plot_regression(model, samples, directory, no_plot_samples):
     plt.figure()
@@ -140,7 +142,7 @@ class MLP(nn.Module):
         outputs = self.forward(inputs)
         labels = labels.reshape(labels.size()[0], 1)
         L2_term = 0
-        for i, l in enumerate(self.linears): # identity covariance prior --> add Neal's scaling later
+        for _, l in enumerate(self.linears): # identity covariance prior --> add Neal's scaling later
             n_inputs = l.weight.size()[0]
             single_layer_L2 = 0.5*(n_inputs/(self.omega**2))*(torch.sum(l.weight**2) + torch.sum(l.bias**2))
             L2_term = L2_term + single_layer_L2
@@ -166,7 +168,8 @@ class HMC_Sampler:
         print('Beginning burn-in phase of {} samples'.format(self.burn_in))
         # don't save the burn-in samples
         for i in tqdm(range(self.burn_in)):
-            new_parameters = self.HMC_transition(model)
+            new_parameters, energy = self.HMC_transition(model)
+            writer.add_scalar('Energy', energy, i)
             if i%100 == 0:
                 if i != 0:
                     print('Acceptance rate: {}%'.format(self.no_accept))
@@ -177,7 +180,8 @@ class HMC_Sampler:
         samples = []
         for i in tqdm(range(self.no_samples)):
             # get new parameters and use them to replace the old ones
-            new_parameters = self.HMC_transition(model)
+            new_parameters, energy = self.HMC_transition(model)
+            writer.add_scalar('Energy', energy, i + self.burn_in)
             for j, param in enumerate(model.parameters()):
                 param.data = new_parameters[j] 
 
@@ -195,6 +199,10 @@ class HMC_Sampler:
 
     def HMC_transition(self, model):
         """perform one transition of the markov chain"""
+        # randomise the step size and number of steps
+        step_size = np.random.uniform(self.step_size[0], self.step_size[1])
+        num_steps = np.random.randint(self.num_steps[0], self.num_steps[1] + 1)
+
         saved_params = deepcopy(list(model.parameters())) # list of all the parameter objects - positions
         p = [] # list of momenta
         for _, param in enumerate(model.parameters()): 
@@ -215,13 +223,13 @@ class HMC_Sampler:
 
         # make half step for momentum at the beginning
         for i, momentum in enumerate(p):
-            momentum += - self.step_size*list(model.parameters())[i].grad.data/2
+            momentum += - step_size*list(model.parameters())[i].grad.data/2
 
         # alternate full steps for position and momentum
-        for i in range(self.num_steps):            
+        for i in range(num_steps):            
             # make a full step for the position
             for l, param in enumerate(model.parameters()):
-                param.data += self.step_size*p[l]
+                param.data += step_size*p[l]
 
             # zero gradients of U wrt parameters q
             for _, param in enumerate(model.parameters()): 
@@ -231,13 +239,13 @@ class HMC_Sampler:
             U.backward() 
 
             # make a full step for the momentum, except at end of trajectory <-- check this ################
-            if not (i == (self.num_steps-1)):
+            if not (i == (num_steps-1)):
                 for j, momentum in enumerate(p):
-                    momentum += - self.step_size*list(model.parameters())[j].grad.data
+                    momentum += - step_size*list(model.parameters())[j].grad.data
 
         # make a half step for momentum at the end
         for i, momentum in enumerate(p):
-            momentum += - self.step_size*list(model.parameters())[i].grad.data/2
+            momentum += - step_size*list(model.parameters())[i].grad.data/2
 
         # negate momentum at the end of trajectory to make the proposal symmetric
         # can probably skip this without effect
@@ -258,9 +266,9 @@ class HMC_Sampler:
 
         if np.random.uniform(0, 1) < torch.exp(start_U - end_U + start_K - end_K).cpu().detach().numpy():
             self.no_accept = self.no_accept + 1
-            return list(model.parameters()) # accept
+            return list(model.parameters()), end_U # accept
         else:
-            return saved_params # reject
+            return saved_params, start_U # reject
 
 
 if __name__ == "__main__":
@@ -271,19 +279,23 @@ if __name__ == "__main__":
 
     # hyperparameters
     noise_variance = 0.01
-    hidden_sizes = [50]
+    hidden_sizes = [50, 50]
     omega = 4
 
     burn_in = 10000
     no_samples = 40000
     no_saved_samples = 40000
     no_plot_samples = 32
-    step_size = 0.0015
-    num_steps = 10
+    step_size = [0.0005, 0.0015]
+    num_steps = [5, 10]
 
-    directory = './/experiments//1d_cosine_separated_gaussian'
+    directory = './/experiments//1d_cosine_separated_deep'
     #data_location = './/experiments//2_points_init//prior_dataset.pkl'
     data_location = '..//vision//data//1D_COSINE//1d_cosine_separated.pkl'
+
+    # set up tensorboard
+    tensorboard_path = os.path.join(directory, 'tensorboard')
+    writer = SummaryWriter(tensorboard_path)
 
     # model
     net = MLP(noise_variance, hidden_sizes, omega)
@@ -303,12 +315,19 @@ if __name__ == "__main__":
     x_train = torch.Tensor(data_load[:,0]).cuda()
     y_train = torch.Tensor(data_load[:,1]).cuda()
 
+    # # profile the code
+    # pr = cProfile.Profile()
+    # pr.enable()
+
     # HMC sample  
     thinning = int(np.ceil(no_samples/no_saved_samples))
     sampler = HMC_Sampler(inputs = x_train, targets = y_train, step_size = step_size, num_steps = num_steps, 
         no_samples = no_samples, burn_in = burn_in, thinning=thinning)
     samples = sampler.get_samples(net) 
     no_saved_samples = len(samples) # the actual number of samples saved
+
+    # pr.disable()
+    # pr.print_stats()
 
     # pickle the samples
     filename = directory + '//HMC_samples'

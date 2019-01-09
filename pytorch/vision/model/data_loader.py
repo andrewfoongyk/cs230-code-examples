@@ -73,7 +73,7 @@ class CosineDataset(Dataset):
     """ load 1-D cosine dataset """
     def __init__(self, data_dir, split):
         # unpickle cosine dataset
-        filename = os.path.join(data_dir, '1d_cosine_compressed.pkl') ############# use compressed version
+        filename = os.path.join(data_dir, '1d_cosine_separated.pkl') ############# use separated version
         with open(filename, 'rb') as f:
             data = pickle.load(f)
         print('unpickled 1-D cosine dataset')

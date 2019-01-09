@@ -12,7 +12,10 @@ import math
 
 # activation functions
 def bump(x):
-    return torch.exp(-x**2)
+    return torch.exp(-x**2)*F.relu(2-torch.abs(x)) # truncated bump (untrainable?)
+
+def retanh(x):
+    return torch.tanh(x)*F.relu(x)
 
 class FCVI_Net(nn.Module):
     def __init__(self, params, prior_init=False): 
@@ -61,8 +64,9 @@ class FCVI_Net(nn.Module):
 
     def forward(self, x, no_samples, shared_weights=False): 
         batch_size = x.size()[0] # x has dimensions (batch_size x no_inputs)
+        # initialise empty cholesky matrix
+        L_init = torch.cuda.FloatTensor(self.no_params, self.no_params).fill_(0)
         # use cov_vector to fill in L
-        L_init = torch.zeros(self.no_params, self.no_params).cuda()
         L_init[np.tril_indices(self.no_params)] = self.cov_vector
         # exponentiate the diagonal
         L_diag = torch.diag(L_init)
@@ -171,7 +175,6 @@ class FCVI_Net(nn.Module):
         layer_weights = []
         layer_biases = []
         end_index = end_index + self.hidden_sizes[-1]*self.output_size
-        #print('HEREREEEE')
         
         weight_mean_vector = self.mean[start_index:end_index]
         weight_mean_matrix = weight_mean_vector.view(self.hidden_sizes[-1], self.output_size)
@@ -231,11 +234,11 @@ class FCVI_Net(nn.Module):
 
     def get_samples(self, L, no_samples, batch_size, shared_weights=False): # return samples of all the parameters, (no_params x no_samples x batch_size)
         if shared_weights == True:
-            z = Variable(torch.Tensor(self.no_params, no_samples).normal_(0, 1).cuda())
+            z = Variable(torch.cuda.FloatTensor(self.no_params, no_samples).normal_(0, 1))
             z = z.expand(batch_size, -1, -1)
             z = z.permute(1,2,0)
         else:
-            z = Variable(torch.Tensor(self.no_params, no_samples, batch_size).normal_(0, 1).cuda())
+            z = Variable(torch.cuda.FloatTensor(self.no_params, no_samples, batch_size).normal_(0, 1))
         means = self.mean.expand(no_samples, batch_size, -1)
         means = means.permute(2,0,1)
         params_samples = means + torch.einsum('ab,bcd->acd', (L, z)) ######## check this
@@ -992,14 +995,14 @@ class MFVI_Linear_Layer(nn.Module):
         # prior parameters 
         self.W_prior_mean = Variable(torch.zeros(n_input, n_output).cuda())
         self.W_prior_logvar = Variable((prior_logvar*torch.ones(n_input, n_output)).cuda())
-        self.b_prior_mean = Variable(torch.zeros(n_output).cuda())
-        self.b_prior_logvar = Variable((prior_logvar*torch.ones(n_output)).cuda())
+        self.b_prior_mean = Variable(torch.zeros(n_output).cuda()) 
+        self.b_prior_logvar = Variable((torch.zeros(n_output)).cuda())# prior logvar on biases unaffected by Neal's scaling
 
         if prior_init == True: # initialise parameters to their prior values
             self.W_mean = nn.Parameter(torch.zeros(n_input, n_output))
             self.W_logvar = nn.Parameter(prior_logvar*torch.ones(n_input, n_output))
-            self.b_mean = nn.Parameter(torch.zeros(n_output))
-            self.b_logvar = nn.Parameter(prior_logvar*torch.ones(n_output))
+            self.b_mean = nn.Parameter(torch.zeros(n_output)) 
+            self.b_logvar = nn.Parameter(torch.zeros(n_output)) # prior logvar on biases unaffected by Neal's scaling
 
         self.num_weights = n_input*n_output + n_output # number of weights and biases
  
@@ -1015,8 +1018,8 @@ class MFVI_Linear_Layer(nn.Module):
             # sample just one weight matrix and just one bias vector
             W_var = torch.exp(self.W_logvar)
             b_var = torch.exp(self.b_logvar)
-            z_W = Variable(torch.Tensor(self.n_input, self.n_output).normal_(0, 1).cuda())
-            z_b = Variable(torch.Tensor(self.n_output).normal_(0, 1).cuda())
+            z_W = Variable(torch.cuda.FloatTensor(self.n_input, self.n_output).normal_(0, 1))
+            z_b = Variable(torch.cuda.FloatTensor(self.n_output).normal_(0, 1))
             W = self.W_mean + torch.mul(torch.sqrt(W_var), z_W)
             b = self.b_mean + torch.mul(torch.sqrt(b_var), z_b)
             b = b.expand(batch_size, -1)
@@ -1051,12 +1054,12 @@ class MFVI_Linear_Layer(nn.Module):
         return samples_activations
 
     def get_shared_random(self, no_samples, batch_size):
-        z = Variable(torch.Tensor(no_samples, self.n_output).normal_(0, 1).cuda())
+        z = Variable(torch.cuda.FloatTensor(no_samples, self.n_output).normal_(0, 1))
         z = z.expand(batch_size, -1, -1)
         return torch.transpose(z, 0, 1)
 
     def get_random(self, no_samples, batch_size):
-        return Variable(torch.Tensor(no_samples, batch_size, self.n_output).normal_(0, 1).cuda()) # standard normal noise matrix
+        return Variable(torch.cuda.FloatTensor(no_samples, batch_size, self.n_output).normal_(0, 1)) # standard normal noise matrix
 
     def KL(self): # get KL between q and prior for this layer
         # W_KL = 0.5*(- self.W_logvar + torch.exp(self.W_logvar) + (self.W_mean)**2)
@@ -1125,6 +1128,24 @@ class MFVI_Net(nn.Module):
                     s = self.activation(s, self.prelu_weight)
                 else:
                     s = self.activation(s) 
+                ##################################### THIS ISN'T WORKING - TRY A MASK INSTEAD
+                #############################################################################
+                # s_bump = bump(s)
+                # no_dims = len(s.size())
+
+                # no_bump_units = int(s_bump.size()[-1]/2) 
+                # s_retanh = bump(s)
+
+                # if no_dims == 2:
+                #     s = torch
+                #     s[:, :no_bump_units] = s_bump[:, :no_bump_units]
+                #     s[:, no_bump_units:] = s_retanh[:, no_bump_units:]
+                # elif no_dims == 3:
+                #     s[:, :, :no_bump_units] = s_bump[:, :,no_bump_units]
+                #     s[:, :, no_bump_units:] = s_retanh[:, :, no_bump_units:]
+                # else: 
+                #     print(no_dims)
+                #     print('errrrrrrrrrrrrrrrrrrrrrrrror')
         if self.dataset == '1d_cosine' or self.dataset == 'prior_dataset': # make this more flexible
             # s has dimension (no_samples x batch_size x no_output=1)
             s = s.view(no_samples, -1) # (no_samples x batch_size)

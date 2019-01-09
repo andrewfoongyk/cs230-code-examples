@@ -102,21 +102,14 @@ class Weight_Plot_Saver(object):
                 self.x_weights = np.linspace(-4, 4, 1000) # since bias variances do not scale with size of input to layer
 
         if parameter == 'weights':
-            # print('starting the weights')
             # plot all the weights in units
             for i, u in enumerate(units):
-                # print(len(weights))
-                # print('layer:{}'.format(u[0]))
-                # print('row:{}'.format(u[1]))
-                # print('column:{}'.format(u[2]))
-                # print(weights[u[0]][0].shape)
                 mu = weights[u[0]][0][u[1]][u[2]] # [layer][mean/sd][weightrow][weightcol]
                 sigma = weights[u[0]][1][u[1]][u[2]]
                 y_weights = scipy.stats.norm.pdf(self.x_weights, mu, sigma)
                 self.axis_weights.plot(self.x_weights, y_weights, self.styles[i%6], linewidth=0.3)
             # print('did the weights')
         elif parameter == 'biases':
-            # print('starting the biases')
             # plot all the biases in units
             for i, u in enumerate(units):
                 mu = biases[u[0]][0][u[1]] # [layer][mean/sd][biasrow]
@@ -124,8 +117,16 @@ class Weight_Plot_Saver(object):
                 y_weights = scipy.stats.norm.pdf(self.x_weights, mu, sigma)
                 self.axis_weights.plot(self.x_weights, y_weights, self.styles[i%6], linewidth=0.3)
             # print('did the biases')
-        elif parameter == 'covariance': # for FCVI
-            self.axis_weights.imshow(np.abs(model.Sigma.cpu().detach().numpy()), interpolation='nearest', cmap=cm.Greys_r)
+        elif parameter == 'covariance': # for FCVI 
+            Sigma = model.Sigma.cpu().detach().numpy()          
+            self.axis_weights.imshow(np.abs(Sigma), interpolation='nearest', cmap=cm.Greys_r)
+        elif parameter == 'correlation': # for FCVI
+            Sigma = model.Sigma.cpu().detach().numpy()
+            Sigma_diag = np.diag(Sigma)
+            outer = np.outer(Sigma_diag, Sigma_diag)
+            Correlations = Sigma/np.sqrt(outer)         
+            im = self.axis_weights.imshow(Correlations , interpolation='nearest')
+            self.fig_weights.colorbar(im)
         elif parameter == 'mean': # for FCVI
             self.axis_weights.imshow(model.mean.cpu().detach().numpy(), interpolation='nearest', cmap=cm.Greys_r)
 
@@ -234,13 +235,16 @@ def whole_dataset_train(model, optimizer, loss_fn, dataloader, metrics, params, 
     
     # make list of units to monitor
     no_units = params.hidden_sizes[0] ########################## change
+    no_output_units = params.hidden_sizes[-1]
     input_units = []
     output_units = []
     bias_units = []
     for i in range(no_units):
         input_units.append((0, 0, i))
-        output_units.append((len(params.hidden_sizes), i, 0)) # change depending on no. of layers
         bias_units.append((0,i))
+
+    for i in range(no_output_units):
+        output_units.append((len(params.hidden_sizes), i, 0)) # change depending on no. of layers
 
     # plotter = Weight_Plotter(model, units = units) # initialise weight animation plotter
     weight_plot_save = Weight_Plot_Saver(args.model_dir)
@@ -311,6 +315,7 @@ def whole_dataset_train(model, optimizer, loss_fn, dataloader, metrics, params, 
                 weight_plot_save.save(model, epoch=i, units=bias_units, name=label + 'biases', parameter='biases')
                 if params.model == 'fcvi':
                     weight_plot_save.save(model, epoch=i, units=None, name='covariance', parameter='covariance', plot_prior=False)
+                    weight_plot_save.save(model, epoch=i, units=None, name='correlation', parameter='correlation', plot_prior=False)
                     #weight_plot_save.save(model, epoch=i, units=None, name='mean', parameter='mean', plot_prior=False)
 
             if i == no_epochs-1:
@@ -319,6 +324,7 @@ def whole_dataset_train(model, optimizer, loss_fn, dataloader, metrics, params, 
                 weight_plot_save.save(model, epoch=i, units=bias_units, name=label + 'biases', parameter='biases')
                 if params.model == 'fcvi':
                     weight_plot_save.save(model, epoch=i, units=None, name='covariance', parameter='covariance', plot_prior=False)
+                    weight_plot_save.save(model, epoch=i, units=None, name='correlation', parameter='correlation', plot_prior=False)
                     #weight_plot_save.save(model, epoch=i, units=None, name='mean', parameter='mean', plot_prior=False)
 
             # update the average loss
@@ -563,7 +569,7 @@ if __name__ == '__main__':
     #plt.show()
     # plot results for regression task
     plot_reg(model, args.data_dir, params, args.model_dir, epoch_number=params.num_epochs)
-    weight_plot_save.save(model, epoch=params.num_epochs)
+    # weight_plot_save.save(model, epoch=params.num_epochs)
 
     # pr.disable()
     # pr.print_stats()

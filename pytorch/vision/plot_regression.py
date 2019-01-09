@@ -15,7 +15,7 @@ def plot_reg(model, data_dir, params, model_dir, epoch_number = 0, prior_draw=Fa
         print('unpickled prior dataset')
     elif params.dataset == '1d_cosine': 
         # unpickle cosine dataset
-        filename = os.path.join(data_dir, '1d_cosine_compressed.pkl') ##################### use the compressed version
+        filename = os.path.join(data_dir, '1d_cosine_separated.pkl') ##################### use the separated version
         with open(filename, 'rb') as f:
             data = pickle.load(f)
         print('unpickled 1-D cosine dataset')

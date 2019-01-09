@@ -49,13 +49,16 @@ class Prior_Dataset_Builder(object):
         plt.show()         
 
 if __name__ == '__main__':
-    n = 100 # number of datapoints
+    n = 2 # number of datapoints
     noise_var = 0.01 # datapoint noise
     X = np.random.uniform(-1, 1, n)
+    # X1 = np.random.uniform(-1, -0.7, 50)
+    # X2 = np.random.uniform(0.5, 1, 50)
+    # X = np.concatenate((X1, X2), axis=0)
 
-    cosx = np.cos(4*X + 0.8)
+    # cosx = np.cos(4*X + 0.8)
     randn = np.random.randn(n)*np.sqrt(noise_var)
-    Y = cosx + randn
+    Y = 0.5*X + 0.5 + randn
 
     # def func(x):
     #     return np.cos(2*x + 0.8)
@@ -73,16 +76,16 @@ if __name__ == '__main__':
     data = np.c_[X.reshape(len(X), -1), Y.reshape(len(Y), -1)]
 
     # pickle the dataset 
-    with open('data\\1D_COSINE\\1d_cosine_compressed.pkl', 'wb') as f:
+    with open('data//1D_COSINE//1d_cosine_separated.pkl', 'wb') as f:
         pickle.dump(data, f)
 
     # unpickle the dataset
-    with open('data\\1D_COSINE\\1d_cosine_compressed.pkl', 'rb') as f:
-        data = pickle.load(f)
+    with open('data//1D_COSINE//1d_cosine_separated.pkl', 'rb') as f:
+        data_load = pickle.load(f)
 
     # plot the dataset
     plt.figure()
-    plt.plot(data[:,0], data[:,1], '+k')
+    plt.plot(data_load[:,0], data_load[:,1], '+k')
     plt.show()
 
 

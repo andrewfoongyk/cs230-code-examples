@@ -424,7 +424,7 @@ class Fixed_Mean_VI_Net(nn.Module):
         # create the layers in the network based on params
         self.hidden_sizes = params.hidden_sizes
         self.linears = nn.ModuleList([Fixed_Mean_VI_Linear_Layer(self.input_size*self.input_channels, self.hidden_sizes[0], self.omega, map_weights[0], map_biases[0], prior_init)])
-        self.linears.extend([Fixed_Mean_VI_Linear_Layer(self.hidden_sizes[i], self.hidden_sizes[i+1], self.omega, map_weights[i+1], map_biases[i+1], prior_init) for i in range(0, len(self.hidden_sizes)-1)])
+        self.linears.extend([Fixed_Mean_VI_Linear_Layer(self.hidden_sizes[i], self.hidden_sizes[i+1], self.omega, map_weights[i+1], map_biases[i+1], prior_init) for i in range(0, lpip3 fren(self.hidden_sizes)-1)])
         self.linears.append(Fixed_Mean_VI_Linear_Layer(self.hidden_sizes[-1], self.output_size, self.omega, map_weights[-1], map_biases[-1], prior_init))
 
     def get_KL_term(self):

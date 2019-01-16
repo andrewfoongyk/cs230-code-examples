@@ -135,19 +135,19 @@ class MLP(nn.Module):
         for i, l in enumerate(self.linears):
             x = l(x)
             if i < len(self.linears) - 1:
-                x = F.relu(x) 
+                x = torch.tanh(x) ######################## playing with activation 
         return x
 
     def get_U(self, inputs, labels):
         outputs = self.forward(inputs)
         labels = labels.reshape(labels.size()[0], 1)
         L2_term = 0
-        for _, l in enumerate(self.linears): # identity covariance prior --> add Neal's scaling later
+        for _, l in enumerate(self.linears): # Neal's prior (bias has variance 1)
             n_inputs = l.weight.size()[0]
-            single_layer_L2 = 0.5*(n_inputs/(self.omega**2))*(torch.sum(l.weight**2) + torch.sum(l.bias**2))
+            single_layer_L2 = 0.5*(n_inputs/(self.omega**2))*torch.sum(l.weight**2) + 0.5*torch.sum(l.bias**2)
             L2_term = L2_term + single_layer_L2
         error = (1/(2*self.noise_variance))*torch.sum((labels - outputs)**2)
-        U = error + 0.01*L2_term
+        U = error + L2_term
         return U
 
 """This version of HMC follows https://arxiv.org/pdf/1206.1901.pdf. Identity mass matrix used"""
@@ -279,17 +279,17 @@ if __name__ == "__main__":
 
     # hyperparameters
     noise_variance = 0.01
-    hidden_sizes = [50, 50]
+    hidden_sizes = [50]
     omega = 4
 
     burn_in = 10000
     no_samples = 40000
     no_saved_samples = 40000
     no_plot_samples = 32
-    step_size = [0.0005, 0.0015]
+    step_size = [0.001, 0.003]
     num_steps = [5, 10]
 
-    directory = './/experiments//1d_cosine_separated_deep'
+    directory = './/experiments//1d_cosine_separated_tanh'
     #data_location = './/experiments//2_points_init//prior_dataset.pkl'
     data_location = '..//vision//data//1D_COSINE//1d_cosine_separated.pkl'
 

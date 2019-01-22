@@ -1,23 +1,27 @@
 # implement Laplace approximation using the outer-product approximation to the Hessian
 import numpy as np
+from numpy import linalg as LA
 import torch
 from tqdm import tqdm
 from tqdm import trange
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.autograd import Variable
+from torch.autograd import grad
+
 import pickle
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-from copy import deepcopy
-from tensorboardX import SummaryWriter
 import os
 import cProfile
 
+import scipy
+from scipy.stats import multivariate_normal
+
 class MLP(nn.Module):
-    def __init__(self, noise_variance, hidden_sizes, omega):
+    def __init__(self, noise_variance, hidden_sizes, omega, activation=torch.tanh):
         super(MLP, self).__init__()
+        self.activation = activation
         self.omega = omega
         self.noise_variance = noise_variance
         self.hidden_sizes = hidden_sizes
@@ -39,9 +43,7 @@ class MLP(nn.Module):
         for i, l in enumerate(self.linears):
             x = l(x)
             if i < len(self.linears) - 1:
-                #x = torch.tanh(x)
-                #x = x*torch.sigmoid(x) # swish
-                x = F.relu(x) ###### activation function very important for laplace
+                x = self.activation(x) ###### activation function very important for laplace
         return x
 
     def get_U(self, inputs, labels):
@@ -76,7 +78,19 @@ class MLP(nn.Module):
             start_index = start_index + grad_vec.size()[0]
         return gradient
 
-    def get_P(self):
+    def get_parameter_vector(self): 
+        # load all the parameters into a single numpy vector
+        parameter_vector = np.zeros(self.no_params)
+        # fill parameter values into a single vector
+        start_index = 0
+        for _, param in enumerate(self.parameters()):
+            param_vec = param.detach().reshape(-1) # flatten into a vector
+            end_index = start_index + param_vec.size()[0]
+            parameter_vector[start_index:end_index] = param_vec.cpu().numpy()
+            start_index = start_index + param_vec.size()[0]
+        return parameter_vector
+
+    def get_P_vector(self):
         # get prior contribution to the Hessian
         P_vector = torch.cuda.FloatTensor(self.no_params).fill_(0)
         P_vector[:1*self.hidden_sizes[0]] = 1/(self.omega**2) # first weight matrix
@@ -102,11 +116,90 @@ class MLP(nn.Module):
         start_index = end_index
         end_index = start_index + 1
         P_vector[start_index:end_index] = 1 # biases have unit variance
-        return torch.diag(P_vector) 
+        return P_vector 
+
+    def linearised_laplace(self, train_inputs, test_inputs, subsampling=None): # return the posterior uncertainties for all the inputs
+
+        if subsampling == None: # don't subsample
+            # form Jacobian matrix of train set, Z - use a for loop for now?
+            no_train = train_inputs.size()[0]
+            Z = torch.cuda.FloatTensor(no_train, self.no_params).fill_(0)
+            for i in range(no_train):
+                # clear gradients
+                optimizer.zero_grad()
+                # get gradient of output wrt single training input
+                x = train_inputs[i]
+                x = torch.unsqueeze(x, 0) # this may not be necessary if x is multidimensional
+                gradient = model.get_gradient(x)
+                # store in Z
+                Z[i,:] = gradient
+        else: # subsample the train set 
+            no_train = subsampling
+            Z = torch.cuda.FloatTensor(no_train, self.no_params).fill_(0)    
+            for i, sample in enumerate(np.random.choice(train_inputs.size()[0], no_train, replace=False)):
+                # clear gradients
+                optimizer.zero_grad()
+                # get gradient of output wrt single training input
+                x = train_inputs[sample]
+                x = torch.unsqueeze(x, 0) # this may not be necessary if x is multidimensional
+                gradient = model.get_gradient(x)
+                # store in Z, and scale to compensate the subsampling
+                Z[i,:] = (train_inputs.size()[0]/no_train)*gradient
+
+        # get list of test gradients
+        no_test = test_inputs.size()[0]
+        G = torch.cuda.FloatTensor(self.no_params, no_test).fill_(0)
+        for i in range(no_test):
+            # clear gradients
+            optimizer.zero_grad()
+            # get gradient of output wrt single test input
+            x = test_inputs[i]
+            x = torch.unsqueeze(x, 0) # this may not be necessary if x is multidimensional
+            gradient = model.get_gradient(x)
+            # store in G
+            G[:,i] = gradient
+        # unsqueeze so its a batch of column vectors ###### maybe not necessary now?
+        Gunsq = torch.unsqueeze(G, 1)
+        
+        #import pdb; pdb.set_trace()
+
+        # calculate ZPinvG as a batch
+        G_batch = Gunsq.permute(2,0,1) # make the batch index first (no_test x no_params x 1)
+        Pinv_vector = 1/self.get_P_vector().unsqueeze(1) # column vector
+        
+        PinvG = Pinv_vector*G_batch # batch elementwise multiply (no_test x no_params x 1)
+        ZPinvG = torch.matmul(Z, PinvG.squeeze().transpose(0,1)) # batch matrix multiply - (no_test x no_train)
+
+        # calculate the 'inner matrix' M and Cholesky decompose
+        PinvZt = Pinv_vector*torch.transpose(Z, 0, 1) # diagonal matrix multiplication      
+
+        M = torch.eye(no_train).cuda() + (1/(self.noise_variance))*torch.matmul(Z, PinvZt)
+
+        # symmetrize M - there may be numerical issues causing it to be non symmetric
+        M = (M + M.transpose(0,1))/2
+        # JITTER M
+        M = M + torch.eye(no_train).cuda()*M[0,0]*1e-6 ########
+
+        U = torch.potrf(M, upper=True) # upper triangular decomposition
+
+        # solve the triangular system
+        V = torch.trtrs(ZPinvG, U, transpose=True)[0] # (no_train x no_test), some of the stuff might need transposing
+        V = V.transpose(0,1) # (no_test x no_train)
+
+        # dot products
+        v = (-1/(self.noise_variance))*torch.bmm(V.view(no_test, 1, no_train), V.view(no_test, no_train, 1)) 
+
+        # prior terms dot products        
+        G_batch *= PinvG
+        prior_terms = G_batch.sum(1)
+
+        predictive_var = self.noise_variance + prior_terms.squeeze() + v.squeeze()
+        #print(predictive_var)
+        return torch.squeeze(predictive_var)
                 
-def plot_reg(model, data_load, directory, iter_number=0, linearise=False, Ainv=0):
+def plot_reg(model, data_load, directory, iter_number=0, linearise=False, Ainv=0, sampling=False, covscale=1, mean=0, title=''):
     # evaluate model on test points
-    N = 1000 # number of test points
+    N = 300 # number of test points
     x_lower = -3
     x_upper = 3
     test_inputs_np = np.linspace(x_lower, x_upper, N)
@@ -119,11 +212,12 @@ def plot_reg(model, data_load, directory, iter_number=0, linearise=False, Ainv=0
     plt.clf() # clear figure
 
     plt.plot(data_load[:,0], data_load[:,1], '+k')
-
+    
     test_outputs = model(test_inputs)
     test_y = test_outputs.data.cpu().numpy()
     test_y = np.squeeze(test_y)
-    plt.plot(test_inputs_np, test_y, color='b')
+    if sampling == False:
+        plt.plot(test_inputs_np, test_y, color='b')
        
     if linearise == True: # add error bars based on the linearisation in Bishop eq (5.173)
         predictive_var = np.zeros(N)
@@ -136,15 +230,52 @@ def plot_reg(model, data_load, directory, iter_number=0, linearise=False, Ainv=0
             gradient = model.get_gradient(x)
             # calculate predictive variance
             predictive_var[i] = model.noise_variance + torch.matmul(gradient, torch.matmul(Ainv, gradient)).data.cpu().numpy()
+        #print(predictive_var)
         predictive_sd = np.sqrt(predictive_var)
         
         plt.fill_between(test_inputs_np, test_y + predictive_sd, 
                 test_y - predictive_sd, color='b', alpha=0.3)
+
+    elif sampling == True: # sample from the Laplace approx Gaussian and plot the regression
+        cov = covscale*Ainv #np.zeros((mean.size, mean.size))
+        no_plot_samples = 32
+        # draw samples from the Gaussian
+        sampled_parameters = np.random.multivariate_normal(mean, cov, no_plot_samples).transpose()
+        
+        # fit those samples back into the model
+        samples = []
+        for i in range(no_plot_samples):
+            # unpack the parameter vector into a list of parameter tensors
+            sample = unpack_sample(model, sampled_parameters[:, i])
+            samples.append(sample)
+
+        # plot all the samples
+        all_test_outputs = np.zeros((no_plot_samples, N))
+        for i, sample in enumerate(samples):
+            for j, param in enumerate(model.parameters()):
+                param.data = sample[j] # fill in the model with these weights
+            # plot regression
+            test_outputs = model(test_inputs)
+            # convert back to np array
+            test_outputs = test_outputs.data.cpu().numpy()
+            test_outputs = test_outputs.reshape(N)
+            plt.plot(test_inputs_np, test_outputs, linewidth=0.3)
+            # save data for ensemble mean and s.d. calculation
+            all_test_outputs[i,:] = test_outputs
+
+        # calculate mean and variance
+        mean = np.mean(all_test_outputs, 0)
+        variance = model.noise_variance + np.mean(all_test_outputs**2, 0) - mean**2
+
+        plt.plot(test_inputs_np, mean, color='r')
+        plt.fill_between(test_inputs_np, mean + np.sqrt(variance), mean - np.sqrt(variance), color='b', alpha=0.3)
  
+    filename = directory + '//regression_iteration_' + str(iter_number) + '.pdf' 
     if linearise == True:
-        filename = directory + '//linearised_laplace.pdf' 
-    else:
-        filename = directory + '//regression_iteration_' + str(iter_number) + '.pdf' 
+        filename = directory + '//linearised_laplace_' + title + '.pdf' 
+    elif sampling == True:    
+        filename = directory + '//sampled_laplace_covscale_' + str(covscale) + '.pdf'
+
     plt.xlabel('$x$')
     plt.ylabel('$y$')
     plt.ylim([-3, 3])
@@ -152,41 +283,173 @@ def plot_reg(model, data_load, directory, iter_number=0, linearise=False, Ainv=0
     plt.savefig(filename)
     plt.close()
 
+def plot(test_inputs, mean, sd, directory, title=''):
+    mean = mean.squeeze() # maybe change for higher dim input?
+    test_inputs = test_inputs.squeeze()
+    test_inputs = test_inputs.data.cpu().numpy()
+    mean = mean.data.cpu().numpy()
+    sd = sd.data.cpu().numpy()
+    plt.figure(1)
+    plt.clf() # clear figure
+
+    plt.plot(test_inputs, mean, color='b')
+
+    plt.plot(data_load[:,0], data_load[:,1], '+k')
+    plt.fill_between(test_inputs, mean + sd, 
+                mean - sd, color='b', alpha=0.3)
+
+    plt.xlabel('$x$')
+    plt.ylabel('$y$')
+    plt.ylim([-3, 3])
+    plt.xlim([-3, 3])
+
+    filename = directory + '//linearised_laplace' + title + '.pdf' 
+    plt.savefig(filename)
+    plt.close()
+
+def unpack_sample(model, parameter_vector):
+    """convert a numpy vector of parameters to a list of parameter tensors"""
+    sample = []
+    start_index = 0
+    end_index = 0   
+    # unpack first weight matrix and bias
+    end_index = end_index + model.hidden_sizes[0]
+    weight_vector = parameter_vector[start_index:end_index]
+    weight_matrix = weight_vector.reshape((model.hidden_sizes[0], 1))
+    sample.append(torch.Tensor(weight_matrix).cuda())
+    start_index = start_index + model.hidden_sizes[0]
+    end_index = end_index + model.hidden_sizes[0]
+    biases_vector = parameter_vector[start_index:end_index]
+    sample.append(torch.Tensor(biases_vector).cuda())
+    start_index = start_index + model.hidden_sizes[0]
+    for i in range(len(model.hidden_sizes)-1): 
+        end_index = end_index + model.hidden_sizes[i]*model.hidden_sizes[i+1]
+        weight_vector = parameter_vector[start_index:end_index]
+        weight_matrix = weight_vector.reshape((model.hidden_sizes[i+1], model.hidden_sizes[i]))
+        sample.append(torch.Tensor(weight_matrix).cuda())
+        start_index = start_index + model.hidden_sizes[i]*model.hidden_sizes[i+1]
+        end_index = end_index + model.hidden_sizes[i+1]
+        biases_vector = parameter_vector[start_index:end_index]
+        sample.append(torch.Tensor(biases_vector).cuda())
+        start_index = start_index + model.hidden_sizes[i+1]
+    # unpack output weight matrix and bias
+    end_index = end_index + model.hidden_sizes[-1]
+    weight_vector = parameter_vector[start_index:end_index]
+    weight_matrix = weight_vector.reshape((1, model.hidden_sizes[-1]))
+    sample.append(torch.Tensor(weight_matrix).cuda())
+    start_index = start_index + model.hidden_sizes[-1]
+    biases_vector = parameter_vector[start_index:] # should reach the end of the parameters vector at this point
+    sample.append(torch.Tensor(biases_vector).cuda())
+    return sample
+
+def plot_cov(cov, directory, title=''):
+    # plot covariance of Gaussian fit
+    fig, ax = plt.subplots()
+    im = ax.imshow(np.abs(cov) , interpolation='nearest', cmap=cm.Greys_r)
+    filepath = os.path.join(directory, title + 'covariance.pdf')
+    fig.savefig(filepath)
+    plt.close()
+
+    # plot correlation matrix using cov matrix 
+    variance_vector = np.diag(cov)
+    sd_vector = np.sqrt(variance_vector)
+    outer_prod = np.outer(sd_vector, sd_vector)
+    correlations = cov/outer_prod
+
+    fig, ax = plt.subplots()
+    im = ax.imshow(correlations , interpolation='nearest')
+    fig.colorbar(im)
+    filepath = os.path.join(directory, title + 'correlation.pdf')
+    fig.savefig(filepath)
+    plt.close()
+
+def get_H(model, x_train, subsample=None, num_subsamples=None, minibatch=None, batch_size=None, no_batches=None):
+    # create 'sum of outer products' matrix
+    # try subsampling or minibatching this 
+    H = torch.cuda.FloatTensor(model.no_params, model.no_params).fill_(0)
+    if subsample == True:
+        # subsampled version
+        for i in np.random.choice(x_train.size()[0], num_subsamples, replace=False): # for a random subsample
+            # clear gradients
+            optimizer.zero_grad()
+            # get gradient of output wrt single training input
+            x = x_train[i]
+            x = torch.unsqueeze(x, 0)
+            gradient = model.get_gradient(x)
+            # form outer product
+            outer = gradient.unsqueeze(1)*gradient.unsqueeze(0)
+            H.add_(outer)
+        # scale H to account for subsampling
+        H = H*(x_train.size()[0]/num_subsamples)
+    elif minibatch == True: 
+        # minibatched version
+        for i in range(no_batches):
+            # randomly select a minibatch
+            gradient = torch.cuda.FloatTensor(model.no_params).fill_(0)
+            for j in np.random.choice(x_train.size()[0], batch_size, replace=False):
+                # clear gradients
+                optimizer.zero_grad()
+                # get gradient of output wrt single training input
+                x = x_train[j]
+                x = torch.unsqueeze(x, 0)
+                gradient.add_(model.get_gradient(x)) # accumulate minibatch gradients
+            gradient = gradient/batch_size # average gradient over batch
+            # form outer product
+            outer = gradient.unsqueeze(1)*gradient.unsqueeze(0)
+            H.add_(outer)
+        # scale H to account for minibatching
+        H = H*(x_train.size()[0]/no_batches)   
+    else:
+        for i in range(x_train.size()[0]): # for all training inputs
+            # clear gradients
+            optimizer.zero_grad()
+            # get gradient of output wrt single training input
+            x = x_train[i]
+            x = torch.unsqueeze(x, 0)
+            gradient = model.get_gradient(x)
+            # form outer product
+            outer = gradient.unsqueeze(1)*gradient.unsqueeze(0)
+            H.add_(outer)
+    #print(H)
+    return H
+
 if __name__ == "__main__":
 
     # set RNG
     seed = 0
-    np.random.seed(0) # 0
-    torch.manual_seed(0) #  230
+    np.random.seed(seed) # 0
+    torch.manual_seed(seed) #  230
 
     # hyperparameters
+    activation_function = torch.tanh
     noise_variance = 0.01
-    hidden_sizes = [50]
+    hidden_sizes = [20, 20]
     omega = 4
     learning_rate = 1e-3
-    no_iters = 20001
+    no_iters = 5001
     plot_iters = 1000
+    #subsample = True
+    #num_subsamples = 5
 
-    directory = './/experiments//1d_cosine'
+    directory = './/experiments//svd_deep'
     #data_location = './/experiments//2_points_init//prior_dataset.pkl'
-    data_location = '..//vision//data//1D_COSINE//1d_cosine_compressed.pkl'
+    data_location = '..//vision//data//1D_COSINE//1d_cosine_separated.pkl'
 
     # save text file with hyperparameters
     file = open(directory + '/hyperparameters.txt','w') 
+    file.write('activation_function: {} \n'.format(activation_function.__name__))
     file.write('seed: {} \n'.format(seed))
     file.write('noise_variance: {} \n'.format(noise_variance))
     file.write('hidden_sizes: {} \n'.format(hidden_sizes))
     file.write('omega: {} \n'.format(omega))
     file.write('learning_rate: {} \n'.format(learning_rate))
     file.write('no_iters: {} \n'.format(no_iters))
+    #file.write('subsample: {} \n'.format(subsample))
+    #file.write('num_subsamples: {} \n'.format(num_subsamples))
     file.close() 
 
-    # # set up tensorboard
-    # tensorboard_path = os.path.join(directory, 'tensorboard')
-    # writer = SummaryWriter(tensorboard_path)
-
     # model
-    model = MLP(noise_variance, hidden_sizes, omega)
+    model = MLP(noise_variance, hidden_sizes, omega, activation=activation_function)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     # Assume that we are on a CUDA machine, then this should print a CUDA device:
     print(device)
@@ -225,30 +488,129 @@ if __name__ == "__main__":
                 plot_reg(model, data_load, directory, i)
 
     # Laplace approximation
+    MAP = model.get_parameter_vector()
 
-    # create 'sum of outer products' matrix
-    H = torch.cuda.FloatTensor(model.no_params, model.no_params).fill_(0)
-    for i in range(x_train.size()[0]): # for all training inputs
-        # clear gradients
-        optimizer.zero_grad()
-        # get gradient of output wrt single training input
-        x = x_train[i]
-        x = torch.unsqueeze(x, 0)
-        gradient = model.get_gradient(x)
-        # form outer product
-        outer = gradient.unsqueeze(1)*gradient.unsqueeze(0)
-        H.add_(outer)
+    # get the fit using woodbury identity
+    # evaluate model on test points
+    N = 100 # number of test points
+    x_lower = -3
+    x_upper = 3
+    test_inputs_np = np.linspace(x_lower, x_upper, N)
+    # move to GPU if available
+    test_inputs = torch.FloatTensor(test_inputs_np)
+    test_inputs = test_inputs.cuda(async=True)
+    test_inputs = torch.unsqueeze(test_inputs, 1) 
+
+    predictive_mean = model(test_inputs)
+
+    # # dont subsample
+    # predictive_var = model.linearised_laplace(x_train, test_inputs)
+    # predictive_sd = torch.sqrt(predictive_var)
+    # # plot
+    # plot(test_inputs, predictive_mean, predictive_sd, directory)
+
+    # # subsample and plot
+    # for num_subsamples in [100, 70, 40, 20, 10, 5, 4, 3, 2, 1]:
+    #     predictive_var = model.linearised_laplace(x_train, test_inputs, num_subsamples)
+    #     predictive_sd = torch.sqrt(predictive_var)
+    #     # plot
+    #     plot(test_inputs, predictive_mean, predictive_sd, directory, title = '_subsample_' + str(num_subsamples))
+
+    ##########################################
+
+    # get the fit without any subsampling
+    # get H
+    H = get_H(model, x_train, subsample=False, num_subsamples=None)
+    # print out the outer product Hessian
+    plot_cov(H.data.cpu().numpy(), directory, title='Hessian_outer_product_')
 
     # get prior contribution to Hessian
-    P = model.get_P()
-
+    P_vector = model.get_P_vector()
+    P = torch.diag(P_vector)
     # calculate and invert (negative) Hessian of posterior
-    A = (1/model.noise_variance)*H + P
-    print(torch.det(A))
-    Ainv = torch.inverse(A)
-    
+    A = (1/model.noise_variance)*H + P 
+    Ainv = torch.inverse(A)    
     # plot regression with error bars using linearisation
     plot_reg(model, data_load, directory, iter_number=no_iters, linearise=True, Ainv=Ainv)
+    # plot covariance and correlation matrix
+    plot_cov(Ainv.data.cpu().numpy(), directory)
+
+    ###########################################
+    # try SVD's of different ranks
+
+    for R in [1,2,3,4,5]:
+        # perform an SVD and keep only the R largest singular values
+        U,S,V = torch.svd(H)
+        H_approx = torch.zeros(model.no_params, model.no_params).cuda()
+        for i in range(R):
+            H_approx.add_(U[:,i].unsqueeze(1)*V[:,i].unsqueeze(0)*S[i])
+        plot_cov(H_approx.data.cpu().numpy(), directory, title='Hessian_SVD_rank_' + str(R))
+
+        # get prior contribution to Hessian
+        P_vector = model.get_P_vector()
+        P = torch.diag(P_vector)
+        # calculate and invert (negative) Hessian of posterior
+        A = (1/model.noise_variance)*H_approx + P 
+        Ainv = torch.inverse(A)    
+        # plot regression with error bars using linearisation
+        plot_reg(model, data_load, directory, iter_number=no_iters, linearise=True, Ainv=Ainv, title='SVD_rank_' + str(R))
+        # plot covariance and correlation matrix
+        plot_cov(Ainv.data.cpu().numpy(), directory)
+
+    ###########################################
+
+    # # try minibatching
+    # H = get_H(model, x_train, subsample=None, num_subsamples=None, minibatch=True, batch_size=100, no_batches=1)
+    # # print out the outer product Hessian
+    # plot_cov(H.data.cpu().numpy(), directory, title='Hessian_OP_minibatch_')
+    # # calculate and invert (negative) Hessian of posterior
+    # A = (1/model.noise_variance)*H + P 
+    # Ainv = torch.inverse(A)    
+    # # plot regression with error bars using linearisation
+    # plot_reg(model, data_load, directory, iter_number=no_iters, linearise=True, Ainv=Ainv, title='minibatching')
+    # # plot covariance and correlation matrix
+    # plot_cov(Ainv.data.cpu().numpy(), directory)
+
+    ###########################################
+
+    # # get the fits with subsampling
+    # for subsampling in [1, 2, 3, 5, 10, 20, 50, 70, 100]:
+    #     # get H
+    #     H = get_H(model, x_train, subsample=True, num_subsamples=subsampling)
+    #     # print out the outer product Hessian
+    #     plot_cov(H.data.cpu().numpy(), directory, title='Hessian_OP_subsampling_' + str(subsampling) + '_')
+    #     # calculate and invert (negative) Hessian of posterior
+    #     A = (1/model.noise_variance)*H + P 
+    #     Ainv = torch.inverse(A)    
+    #     # plot regression with error bars using linearisation
+    #     plot_reg(model, data_load, directory, iter_number=no_iters, linearise=True, Ainv=Ainv, title='subsampling_' + str(subsampling))
+    #     # plot covariance and correlation matrix
+    #     plot_cov(Ainv.data.cpu().numpy(), directory)
+
+    ##########################################
+
+    # # find the eigenvalues of A
+    # w, v = LA.eig(A.data.cpu().numpy())
+    # w = np.sort(w)
+    # print('eigenvalues: {}'.format(w))
+
+    # # print the Jacobian
+    # model.linearised_laplace(x_train, None)
+
+    # print out A
+    # plot_cov(A.data.cpu().numpy(), directory, title='A_')
+
+    # plot regression with error bars using sampling  
+    # for covscale in [1, 0.5, 0.1, 0.05, 0.01, 0.005, 0.001]:
+    #    plot_reg(model, data_load, directory, iter_number=no_iters, linearise=False, Ainv=Ainv, sampling=True, covscale=covscale, mean=MAP)
+
+    
+
+
+
+    
+
+    
 
 
 

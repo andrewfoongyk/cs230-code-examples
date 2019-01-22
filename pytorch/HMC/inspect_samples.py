@@ -326,7 +326,7 @@ if __name__ == "__main__":
     np.random.seed(0) # 0
     torch.manual_seed(230) #  230
 
-    directory = './/experiments//1d_cosine_separated2'
+    directory = './/experiments//1d_cosine_separated_tanh'
     # hyperparameters
     noise_variance = 0.01
     hidden_sizes = [50]
@@ -336,7 +336,7 @@ if __name__ == "__main__":
     no_samples = 40000
     no_saved_samples = 40000
     no_plot_samples = 32
-    step_size = [0.0005, 0.0015]
+    step_size = [0.001, 0.003]
     num_steps = [5, 10]
 
     with open(directory + '//HMC_samples', 'rb') as f:

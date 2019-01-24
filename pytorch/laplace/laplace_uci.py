@@ -54,10 +54,11 @@ class MLP(nn.Module):
                 x = self.activation(x) ###### activation function very important for laplace
         return x
 
-    def get_U(self, inputs, labels, trainset_size=100):
+    def get_U(self, inputs, labels, trainset_size):
+        minibatch_size = labels.shape()[0]
+
         if self.learned_noise_var == True:
             self.noise_variance = self.get_noise_var(self.noise_var_param)
-        #print(self.noise_var_param)
         outputs = self.forward(inputs)
         labels = labels.reshape(labels.size()[0], 1)
         L2_term = 0
@@ -65,10 +66,12 @@ class MLP(nn.Module):
             n_inputs = l.weight.size()[0]
             single_layer_L2 = 0.5*(n_inputs/(self.omega**2))*torch.sum(l.weight**2) + 0.5*torch.sum(l.bias**2)
             L2_term = L2_term + single_layer_L2
+
+        #### I'M HERREEEEE - Scale the loss function to accommodate minibatching!    
         if self.learned_noise_var == True:
-            error = (1/(2*self.get_noise_var(self.noise_var_param)))*torch.sum((labels - outputs)**2)
+            error = (trainset_size/minibatch_size)*(1/(2*self.get_noise_var(self.noise_var_param)))*torch.sum((labels - outputs)**2)
         else:
-            error = (1/(2*self.noise_variance))*torch.sum((labels - outputs)**2)
+            error = (trainset_size/minibatch_size)*(1/(2*self.noise_variance))*torch.sum((labels - outputs)**2)
 
         if self.learned_noise_var == True:
             noise_term = (trainset_size/2)*torch.log(2*3.1415926536*self.get_noise_var(self.noise_var_param))
@@ -219,120 +222,6 @@ class MLP(nn.Module):
         predictive_var = self.noise_variance + prior_terms.squeeze() + v.squeeze()
         #print(predictive_var)
         return torch.squeeze(predictive_var)
-                
-def plot_reg(model, data_load, directory, iter_number=0, linearise=False, Ainv=0, sampling=False, covscale=1, mean=0, title=''):
-    # evaluate model on test points
-    N = 300 # number of test points
-    x_lower = -3
-    x_upper = 3
-    test_inputs_np = np.linspace(x_lower, x_upper, N)
-    # move to GPU if available
-    test_inputs = torch.FloatTensor(test_inputs_np)
-    test_inputs = test_inputs.cuda(async=True)
-    test_inputs = torch.unsqueeze(test_inputs, 1) 
-
-    plt.figure(1)
-    plt.clf() # clear figure
-
-    plt.plot(data_load[:,0], data_load[:,1], '+k')
-    
-    test_outputs = model(test_inputs)
-    test_y = test_outputs.data.cpu().numpy()
-    test_y = np.squeeze(test_y)
-    if sampling == False:
-        plt.plot(test_inputs_np, test_y, color='b')
-        if linearise == False: # add error bar showing the noise variance
-            predictive_sd = np.sqrt(model.noise_variance.data.cpu().numpy())
-            plt.fill_between(test_inputs_np, test_y + predictive_sd, 
-                test_y - predictive_sd, color='b', alpha=0.3)
-       
-    if linearise == True: # add error bars based on the linearisation in Bishop eq (5.173)
-        predictive_var = np.zeros(N)
-        for i in range(N): # for each test point
-            # clear gradients
-            optimizer.zero_grad()
-            # get gradient of output wrt single training input
-            x = test_inputs[i]
-            x = torch.unsqueeze(x, 0)
-            gradient = model.get_gradient(x)
-            # calculate predictive variance
-            predictive_var[i] = (model.noise_variance + torch.matmul(gradient, torch.matmul(Ainv, gradient))).data.cpu().numpy()
-        #print(predictive_var)
-        predictive_sd = np.sqrt(predictive_var)
-        
-        plt.fill_between(test_inputs_np, test_y + predictive_sd, 
-                test_y - predictive_sd, color='b', alpha=0.3)
-
-    elif sampling == True: # sample from the Laplace approx Gaussian and plot the regression
-        cov = covscale*Ainv #np.zeros((mean.size, mean.size))
-        no_plot_samples = 32
-        # draw samples from the Gaussian
-        sampled_parameters = np.random.multivariate_normal(mean, cov, no_plot_samples).transpose()
-        
-        # fit those samples back into the model
-        samples = []
-        for i in range(no_plot_samples):
-            # unpack the parameter vector into a list of parameter tensors
-            sample = unpack_sample(model, sampled_parameters[:, i])
-            samples.append(sample)
-
-        # plot all the samples
-        all_test_outputs = np.zeros((no_plot_samples, N))
-        for i, sample in enumerate(samples):
-            for j, param in enumerate(model.parameters()):
-                param.data = sample[j] # fill in the model with these weights
-            # plot regression
-            test_outputs = model(test_inputs)
-            # convert back to np array
-            test_outputs = test_outputs.data.cpu().numpy()
-            test_outputs = test_outputs.reshape(N)
-            plt.plot(test_inputs_np, test_outputs, linewidth=0.3)
-            # save data for ensemble mean and s.d. calculation
-            all_test_outputs[i,:] = test_outputs
-
-        # calculate mean and variance
-        mean = np.mean(all_test_outputs, 0)
-        variance = model.noise_variance + np.mean(all_test_outputs**2, 0) - mean**2
-
-        plt.plot(test_inputs_np, mean, color='r')
-        plt.fill_between(test_inputs_np, mean + np.sqrt(variance), mean - np.sqrt(variance), color='b', alpha=0.3)
- 
-    filename = directory + '//regression_iteration_' + str(iter_number) + '.pdf' 
-    if linearise == True:
-        filename = directory + '//linearised_laplace_' + title + '.pdf' 
-    elif sampling == True:    
-        filename = directory + '//sampled_laplace_covscale_' + str(covscale) + '.pdf'
-
-    plt.xlabel('$x$')
-    plt.ylabel('$y$')
-    plt.ylim([-3, 3])
-    plt.xlim([-3, 3])
-    plt.savefig(filename)
-    plt.close()
-
-def plot(test_inputs, mean, sd, directory, title=''):
-    mean = mean.squeeze() # maybe change for higher dim input?
-    test_inputs = test_inputs.squeeze()
-    test_inputs = test_inputs.data.cpu().numpy()
-    mean = mean.data.cpu().numpy()
-    sd = sd.data.cpu().numpy()
-    plt.figure(1)
-    plt.clf() # clear figure
-
-    plt.plot(test_inputs, mean, color='b')
-
-    plt.plot(data_load[:,0], data_load[:,1], '+k')
-    plt.fill_between(test_inputs, mean + sd, 
-                mean - sd, color='b', alpha=0.3)
-
-    plt.xlabel('$x$')
-    plt.ylabel('$y$')
-    plt.ylim([-3, 3])
-    plt.xlim([-3, 3])
-
-    filename = directory + '//linearised_laplace' + title + '.pdf' 
-    plt.savefig(filename)
-    plt.close()
 
 def unpack_sample(model, parameter_vector):
     """convert a numpy vector of parameters to a list of parameter tensors"""
@@ -456,12 +345,14 @@ if __name__ == "__main__":
     no_iters = 20001
     plot_iters = 1000
     learned_noise_var = True
+    minibatch_size = 10
+    no_epochs = 40
     #subsample = True
     #num_subsamples = 5
 
-    directory = './/experiments//sandbox'
+    directory = './/experiments//boston_housing'
     #data_location = './/experiments//2_points_init//prior_dataset.pkl'
-    data_location = '..//vision//data//1D_COSINE//1d_cosine_separated.pkl'
+    data_location = '..//vision//data//boston_housing//boston_housing.pkl'
 
     # save text file with hyperparameters
     file = open(directory + '/hyperparameters.txt','w') 
@@ -488,65 +379,84 @@ if __name__ == "__main__":
 
     # get dataset
     with open(data_location, 'rb') as f:
-        data_load = pickle.load(f)
+        train_set, train_set_normalised, test_set, train_mean, train_sd = pickle.load(f)
 
-    x_train = torch.Tensor(data_load[:,0]).cuda()
-    y_train = torch.Tensor(data_load[:,1]).cuda()
+    x_train_normalised = torch.Tensor(train_set[:,:-1]).cuda()
+    y_train_normalised = torch.Tensor(train_set[:,-1]).cuda()
+
+    trainset_size = y_train_normalised.size[0]
+
+    x_test = torch.Tensor(test_set[:,:-1]).cuda()
+    y_test = torch.Tensor(test_set[:,-1]).cuda()
 
     # train MAP network
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    with trange(no_iters) as t:
-        for i in t:
-            # forward pass and calculate loss
-            loss = model.get_U(x_train, y_train, trainset_size=100)
-        
-            # clear previous gradients, compute gradients of all variables wrt loss
-            optimizer.zero_grad()
-            loss.backward()
+    for epoch in range(no_epochs): # loop over epochs
+        # calculate the number of batches in this epoch
+        no_batches = int(np.ceil(trainset_size/minibatch_size))
+        print('Beginning epoch {}'.format(epoch))
+        with trange(no_batches) as t: # loop over trainset
+            for i in t:
+                # shuffle the dataset
+                idx = torch.randperm(trainset_size)
+                x_train_normalised = x_train_normalised[idx,:] 
+                y_train_normalised = y_train_normalised[idx,:] 
+                
+                # fetch the batch, but only if there is enough datapoints left
+                if (i+1)*minibatch_size <= trainset_size - 1:
+                    x_train_batch = x_train_normalised[i*minibatch_size:(i+1)*minibatch_size]
+                    y_train_batch = y_train_normalised[i*minibatch_size:(i+1)*minibatch_size]
 
-            # perform updates using calculated gradients
-            optimizer.step()
+                # forward pass and calculate loss
+                loss = model.get_U(x_train_batch, y_train_batch, trainset_size=trainset_size)
+            
+                # clear previous gradients, compute gradients of all variables wrt loss
+                optimizer.zero_grad()
+                loss.backward()
 
-            # update tqdm 
-            if i % 10 == 0:
-                t.set_postfix(loss=loss.item())
+                # perform updates using calculated gradients
+                optimizer.step()
 
-            # plot the regression
-            if i % plot_iters == 0:
-                plot_reg(model, data_load, directory, i)
-                plot_reg(model, data_load, directory, i)
+                # update tqdm 
+                if i % 10 == 0:
+                    t.set_postfix(loss=loss.item())
 
-    # Laplace approximation
-    MAP = model.get_parameter_vector()
+                # plot the regression
+                if i % plot_iters == 0:
+                    plot_reg(model, data_load, directory, i)
+                    plot_reg(model, data_load, directory, i)
 
-    # get the fit using woodbury identity
-    # evaluate model on test points
-    N = 100 # number of test points
-    x_lower = -3
-    x_upper = 3
-    test_inputs_np = np.linspace(x_lower, x_upper, N)
-    # move to GPU if available
-    test_inputs = torch.FloatTensor(test_inputs_np)
-    test_inputs = test_inputs.cuda(async=True)
-    test_inputs = torch.unsqueeze(test_inputs, 1) 
+    # # Laplace approximation
+    # MAP = model.get_parameter_vector()
 
-    predictive_mean = model(test_inputs)
+    # # get the fit using woodbury identity
+    # # evaluate model on test points
+    # N = 100 # number of test points
+    # x_lower = -3
+    # x_upper = 3
+    # test_inputs_np = np.linspace(x_lower, x_upper, N)
+    # # move to GPU if available
+    # test_inputs = torch.FloatTensor(test_inputs_np)
+    # test_inputs = test_inputs.cuda(async=True)
+    # test_inputs = torch.unsqueeze(test_inputs, 1) 
 
-    ##########################################
-    # use O(no_data^3) matrix inversion
+    # predictive_mean = model(test_inputs)
 
-    # dont subsample
-    predictive_var = model.linearised_laplace(x_train, test_inputs)
-    predictive_sd = torch.sqrt(predictive_var)
-    # plot
-    plot(test_inputs, predictive_mean, predictive_sd, directory)
+    # ##########################################
+    # # use O(no_data^3) matrix inversion
 
-    # subsample and plot
-    for num_subsamples in [100, 70, 40, 20, 10, 5, 4, 3, 2, 1]:
-        predictive_var = model.linearised_laplace(x_train, test_inputs, num_subsamples)
-        predictive_sd = torch.sqrt(predictive_var)
-        # plot
-        plot(test_inputs, predictive_mean, predictive_sd, directory, title = '_subsample_' + str(num_subsamples))
+    # # dont subsample
+    # predictive_var = model.linearised_laplace(x_train, test_inputs)
+    # predictive_sd = torch.sqrt(predictive_var)
+    # # plot
+    # plot(test_inputs, predictive_mean, predictive_sd, directory)
+
+    # # subsample and plot
+    # for num_subsamples in [100, 70, 40, 20, 10, 5, 4, 3, 2, 1]:
+    #     predictive_var = model.linearised_laplace(x_train, test_inputs, num_subsamples)
+    #     predictive_sd = torch.sqrt(predictive_var)
+    #     # plot
+    #     plot(test_inputs, predictive_mean, predictive_sd, directory, title = '_subsample_' + str(num_subsamples))
 
     ##########################################
 

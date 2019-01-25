@@ -21,22 +21,23 @@ from scipy.stats import multivariate_normal
 class MLP(nn.Module):
     def __init__(self, noise_variance, hidden_sizes, omega, activation=torch.tanh, learned_noise_var=False):
         super(MLP, self).__init__()
+        self.dim_input = 13 ####################### change this when not doing boston housing
         self.activation = activation
         self.omega = omega
         self.learned_noise_var = learned_noise_var
         if learned_noise_var == False:
             self.noise_variance = torch.Tensor([noise_variance]).cuda()
         else:
-            self.noise_var_param = nn.Parameter(torch.Tensor([-5]).cuda())
+            self.noise_var_param = nn.Parameter(torch.Tensor([-1]).cuda())
             self.noise_variance = self.get_noise_var(self.noise_var_param)
         self.hidden_sizes = hidden_sizes
-        self.linears = nn.ModuleList([nn.Linear(1, self.hidden_sizes[0])])
+        self.linears = nn.ModuleList([nn.Linear(13, self.hidden_sizes[0])])
         self.linears.extend([nn.Linear(self.hidden_sizes[i], self.hidden_sizes[i+1]) for i in range(0, len(self.hidden_sizes)-1)])
         self.linears.append(nn.Linear(self.hidden_sizes[-1], 1))
         print(self.linears)
 
         # calculate number of parameters in network
-        no_params = 1*self.hidden_sizes[0] # first weight matrix
+        no_params = 13*self.hidden_sizes[0] # first weight matrix
         for i in range(len(self.hidden_sizes)-1):
             no_params = no_params + self.hidden_sizes[i] + self.hidden_sizes[i]*self.hidden_sizes[i+1]
         no_params = no_params + self.hidden_sizes[-1] + self.hidden_sizes[-1]*1 + 1 # final weight matrix and last 2 biases
@@ -46,8 +47,6 @@ class MLP(nn.Module):
         return torch.log(1 + torch.exp(noise_var_param)) + 1e-5
 
     def forward(self, x):
-        batch_size = x.size()[0]
-        x = x.view(batch_size, 1)
         for i, l in enumerate(self.linears):
             x = l(x)
             if i < len(self.linears) - 1:
@@ -55,7 +54,9 @@ class MLP(nn.Module):
         return x
 
     def get_U(self, inputs, labels, trainset_size):
-        minibatch_size = labels.shape()[0]
+        #import pdb; pdb.set_trace()
+
+        minibatch_size = labels.size()[0]
 
         if self.learned_noise_var == True:
             self.noise_variance = self.get_noise_var(self.noise_var_param)
@@ -66,8 +67,7 @@ class MLP(nn.Module):
             n_inputs = l.weight.size()[0]
             single_layer_L2 = 0.5*(n_inputs/(self.omega**2))*torch.sum(l.weight**2) + 0.5*torch.sum(l.bias**2)
             L2_term = L2_term + single_layer_L2
-
-        #### I'M HERREEEEE - Scale the loss function to accommodate minibatching!    
+  
         if self.learned_noise_var == True:
             error = (trainset_size/minibatch_size)*(1/(2*self.get_noise_var(self.noise_var_param)))*torch.sum((labels - outputs)**2)
         else:
@@ -155,7 +155,7 @@ class MLP(nn.Module):
                 optimizer.zero_grad()
                 # get gradient of output wrt single training input
                 x = train_inputs[i]
-                x = torch.unsqueeze(x, 0) # this may not be necessary if x is multidimensional
+                # x = torch.unsqueeze(x, 0) # this may not be necessary if x is multidimensional
                 gradient = model.get_gradient(x)
                 # store in Z
                 Z[i,:] = gradient
@@ -167,7 +167,7 @@ class MLP(nn.Module):
                 optimizer.zero_grad()
                 # get gradient of output wrt single training input
                 x = train_inputs[sample]
-                x = torch.unsqueeze(x, 0) # this may not be necessary if x is multidimensional
+                # x = torch.unsqueeze(x, 0) # this may not be necessary if x is multidimensional
                 gradient = model.get_gradient(x)
                 # store in Z, and scale to compensate the subsampling
                 Z[i,:] = (train_inputs.size()[0]/no_train)*gradient
@@ -329,6 +329,58 @@ def get_H(model, x_train, subsample=None, num_subsamples=None, minibatch=None, b
     #print(H)
     return H
 
+def evaluate(model, x_test, y_test, train_mean, train_sd, laplace=False, x_train_normalised=None, subsampling=None):
+    # evaluate the model on the test/validation set
+    eval_batch_size = 100 # feed in 100 points at a time
+    testset_size = y_test.size()[0]
+    num_batches = int(np.ceil(testset_size/eval_batch_size))
+
+    sum_squared_error = 0
+    sum_log_likelihood = 0
+    for i in range(num_batches):
+        if i != num_batches - 1: # this isn't the final batch
+            # fetch a batch of test inputs
+            inputs = x_test[i*eval_batch_size:(i+1)*eval_batch_size,:]
+            labels = y_test[i*eval_batch_size:(i+1)*eval_batch_size]
+        else:
+            # fetch the rest of the test inputs
+            inputs = x_test[i*eval_batch_size:,:]
+            labels = y_test[i*eval_batch_size:]
+        actual_batch_size = labels.shape[0]
+
+        # scale the inputs because of the normalisation
+        inputs = inputs*train_sd[:-1] # broadcast
+        inputs = inputs + train_mean[:-1] # broadcast
+        outputs = model(inputs)
+        # scale the outputs because of the normalisation
+        outputs = outputs*train_sd[-1]
+        outputs = outputs + train_mean[-1]
+
+        # calculate sum squared errors for this batch
+        squared_error = torch.sum((outputs - labels)**2)
+        sum_squared_error = sum_squared_error + squared_error
+
+        # calculate log likelihood for this batch      
+        if laplace == False: 
+            noise_var = model.get_noise_var(model.noise_var_param)
+            # scale the noise var because of the normalisation
+            noise_var = noise_var*(train_sd[-1]**2)            
+            log_likelihood = -0.5*actual_batch_size*torch.log(2*3.1415926536*noise_var) - (1/(2*noise_var))*squared_error
+        else: # do Laplace approximation
+            # get the predictive variances
+            predictive_var = model.linearised_laplace(x_train_normalised, inputs, subsampling=50)
+            # scale predictive var because of the normalisation
+            predictive_var = predictive_var*(train_sd[-1]**2)  
+            log_likelihood = -0.5*actual_batch_size*torch.log(2*3.1415926536*predictive_var) - (1/(2*predictive_var))*squared_error
+        
+        sum_log_likelihood = sum_log_likelihood + log_likelihood
+    
+    mean_squared_error = sum_squared_error/testset_size
+    mean_nll = -sum_log_likelihood/testset_size
+
+    return mean_squared_error, mean_nll[0]
+
+
 if __name__ == "__main__":
 
     # set RNG
@@ -339,11 +391,9 @@ if __name__ == "__main__":
     # hyperparameters
     activation_function = torch.tanh
     noise_variance = 0.01
-    hidden_sizes = [256, 256, 256]
+    hidden_sizes = [50, 50]
     omega = 4
     learning_rate = 1e-3
-    no_iters = 20001
-    plot_iters = 1000
     learned_noise_var = True
     minibatch_size = 10
     no_epochs = 40
@@ -362,7 +412,6 @@ if __name__ == "__main__":
     file.write('hidden_sizes: {} \n'.format(hidden_sizes))
     file.write('omega: {} \n'.format(omega))
     file.write('learning_rate: {} \n'.format(learning_rate))
-    file.write('no_iters: {} \n'.format(no_iters))
     file.write('learned_noise_var: {} \n'.format(learned_noise_var))
     #file.write('subsample: {} \n'.format(subsample))
     #file.write('num_subsamples: {} \n'.format(num_subsamples))
@@ -381,10 +430,13 @@ if __name__ == "__main__":
     with open(data_location, 'rb') as f:
         train_set, train_set_normalised, test_set, train_mean, train_sd = pickle.load(f)
 
-    x_train_normalised = torch.Tensor(train_set[:,:-1]).cuda()
-    y_train_normalised = torch.Tensor(train_set[:,-1]).cuda()
+    train_mean = torch.Tensor(train_mean).cuda()
+    train_sd = torch.Tensor(train_sd).cuda()
 
-    trainset_size = y_train_normalised.size[0]
+    x_train_normalised = torch.Tensor(train_set_normalised[:,:-1]).cuda()
+    y_train_normalised = torch.Tensor(train_set_normalised[:,-1]).cuda()
+
+    trainset_size = y_train_normalised.size()[0]
 
     x_test = torch.Tensor(test_set[:,:-1]).cuda()
     y_test = torch.Tensor(test_set[:,-1]).cuda()
@@ -392,26 +444,31 @@ if __name__ == "__main__":
     # train MAP network
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     for epoch in range(no_epochs): # loop over epochs
+        if epoch == 0: # at initialisation
+            MAP_MSE, MAP_NLL = evaluate(model, x_test, y_test, train_mean, train_sd) # without laplace
+            print('test MAP_RMSE: {}'.format(torch.sqrt(MAP_MSE)))
+            print('test MAP_NLL: {}'.format(MAP_NLL))
         # calculate the number of batches in this epoch
-        no_batches = int(np.ceil(trainset_size/minibatch_size))
+        no_batches = int(np.floor(trainset_size/minibatch_size))
         print('Beginning epoch {}'.format(epoch))
         with trange(no_batches) as t: # loop over trainset
             for i in t:
+                optimizer.zero_grad()
+
                 # shuffle the dataset
                 idx = torch.randperm(trainset_size)
                 x_train_normalised = x_train_normalised[idx,:] 
-                y_train_normalised = y_train_normalised[idx,:] 
+                y_train_normalised = y_train_normalised[idx] 
                 
-                # fetch the batch, but only if there is enough datapoints left
+                # fetch the batch, but only if there are enough datapoints left
                 if (i+1)*minibatch_size <= trainset_size - 1:
-                    x_train_batch = x_train_normalised[i*minibatch_size:(i+1)*minibatch_size]
+                    x_train_batch = x_train_normalised[i*minibatch_size:(i+1)*minibatch_size,:]
                     y_train_batch = y_train_normalised[i*minibatch_size:(i+1)*minibatch_size]
-
+                
                 # forward pass and calculate loss
                 loss = model.get_U(x_train_batch, y_train_batch, trainset_size=trainset_size)
             
-                # clear previous gradients, compute gradients of all variables wrt loss
-                optimizer.zero_grad()
+                # clear previous gradients, compute gradients of all variables wrt loss               
                 loss.backward()
 
                 # perform updates using calculated gradients
@@ -421,11 +478,14 @@ if __name__ == "__main__":
                 if i % 10 == 0:
                     t.set_postfix(loss=loss.item())
 
-                # plot the regression
-                if i % plot_iters == 0:
-                    plot_reg(model, data_load, directory, i)
-                    plot_reg(model, data_load, directory, i)
-
+        # evaluate test set loss
+        MAP_MSE, MAP_NLL = evaluate(model, x_test, y_test, train_mean, train_sd) # without laplace
+        #lap_MSE, lap_NLL = evaluate(model, x_test, y_test, train_mean, train_sd, laplace=True, x_train_normalised=x_train_normalised, subsampling=None) # with laplace
+        print('test MAP_RMSE: {}'.format(torch.sqrt(MAP_MSE)))
+        print('test MAP_NLL: {}'.format(MAP_NLL))
+        #print('test lap_MSE: {}'.format(lap_MSE))
+        #print('test lap_NLL: {}'.format(lap_NLL))
+        
     # # Laplace approximation
     # MAP = model.get_parameter_vector()
 

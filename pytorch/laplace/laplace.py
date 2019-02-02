@@ -450,7 +450,7 @@ if __name__ == "__main__":
     # hyperparameters
     activation_function = torch.tanh
     noise_variance = 0.01
-    hidden_sizes = [256, 256, 256]
+    hidden_sizes = [50]
     omega = 4
     learning_rate = 1e-3
     no_iters = 20001
@@ -459,7 +459,7 @@ if __name__ == "__main__":
     #subsample = True
     #num_subsamples = 5
 
-    directory = './/experiments//sandbox'
+    directory = './/experiments//subsampling'
     #data_location = './/experiments//2_points_init//prior_dataset.pkl'
     data_location = '..//vision//data//1D_COSINE//1d_cosine_separated.pkl'
 

@@ -22,11 +22,6 @@ from sklearn.utils.extmath import cartesian
 from copy import deepcopy
 import gc
 
-def memReport():
-    for obj in gc.get_objects():
-        if torch.is_tensor(obj):
-            print(type(obj), obj.size())
-
 class MLP(nn.Module):
     def __init__(self, noise_variance, hidden_sizes, omega, activation=torch.tanh, learned_noise_var=False, input_dim=None, noise_param_init=None, standard_normal_prior=None):
         super(MLP, self).__init__()
@@ -118,15 +113,17 @@ class MLP(nn.Module):
         return gradient
 
     def get_parameter_vector(self): 
-        # load all the parameters into a single numpy vector
+        # load all the parameters into a single numpy vector EXCEPT the noise variance
         parameter_vector = np.zeros(self.no_params)
         # fill parameter values into a single vector
         start_index = 0
-        for _, param in enumerate(self.parameters()):
-            param_vec = param.detach().reshape(-1) # flatten into a vector
-            end_index = start_index + param_vec.size()[0]
-            parameter_vector[start_index:end_index] = param_vec.cpu().numpy()
-            start_index = start_index + param_vec.size()[0]
+
+        for name, param in self.named_parameters():
+            if name != 'noise_var_param': # dont include noise variance
+                param_vec = param.detach().reshape(-1) # flatten into a vector
+                end_index = start_index + param_vec.size()[0]
+                parameter_vector[start_index:end_index] = param_vec.cpu().numpy()
+                start_index = start_index + param_vec.size()[0]
         return parameter_vector
 
     def get_P_vector(self):
@@ -220,9 +217,51 @@ class MLP(nn.Module):
         print('predictive_var: {}'.format(predictive_var))
         return predictive_var.detach()
 
-    #def linearised_laplace_direct_cholesky(self, ):
-    # do a numerically stable version of the algorithm
+    def get_L(self, train_inputs, optimizer=None): # invert the Hessian in 'parameter space' instead of 'data space'
+        if self.learned_noise_var == True:
+            noise_variance = self.get_noise_var(self.noise_var_param)
+        else:
+            noise_variance = self.noise_variance   
 
+        # get A
+        H = self.get_H(train_inputs, optimizer)
+        P = torch.diag(self.get_P_vector())
+        A = (1/noise_variance)*H + P
+        # symmetrise in case numerical issues
+        A = (A + A.transpose(0,1))/2
+        # jitter A
+        A = A + torch.eye(self.no_params).cuda()*A[0,0]*1e-6 
+        # cholesky decompose ############ why does this fail for naval??????
+        L = torch.potrf(A, upper=False) # lower triangular decomposition
+        return L.detach()
+
+    def linearised_laplace_direct_cholesky(self, L, test_inputs, optimizer=None):
+        # do a numerically stable version of the algorithm
+        if self.learned_noise_var == True:
+            noise_variance = self.get_noise_var(self.noise_var_param)
+        else:
+            noise_variance = self.noise_variance 
+
+        # get list of test gradients
+        no_test = test_inputs.size()[0]
+        G = torch.cuda.FloatTensor(self.no_params, no_test).fill_(0)
+        for i in range(no_test):
+            # clear gradients
+            optimizer.zero_grad()
+            # get gradient of output wrt single test input
+            x = test_inputs[i]
+            x = torch.unsqueeze(x, 0) # this may not be necessary if x is multidimensional
+            gradient = self.get_gradient(x)
+            # store in G
+            G[:,i] = gradient
+            
+        # backsolve for all columns
+        LslashG = torch.trtrs(G, L, upper=False)[0]  
+
+        # batch dot product
+        predictive_var = noise_variance + torch.sum(LslashG**2, 0)
+        return predictive_var.detach()
+        
     def linearised_laplace(self, train_inputs, test_inputs, subsampling=None, optimizer=None): # return the posterior uncertainties for all the inputs
 
         if self.learned_noise_var == True:
@@ -302,40 +341,40 @@ class MLP(nn.Module):
         predictive_var = self.noise_variance + prior_terms.squeeze() + v.squeeze()
         return torch.squeeze(predictive_var)
 
-def unpack_sample(model, parameter_vector):
-    """convert a numpy vector of parameters to a list of parameter tensors"""
-    sample = []
-    start_index = 0
-    end_index = 0   
-    # unpack first weight matrix and bias
-    end_index = end_index + model.hidden_sizes[0]
-    weight_vector = parameter_vector[start_index:end_index]
-    weight_matrix = weight_vector.reshape((model.hidden_sizes[0], 1))
-    sample.append(torch.Tensor(weight_matrix).cuda())
-    start_index = start_index + model.hidden_sizes[0]
-    end_index = end_index + model.hidden_sizes[0]
-    biases_vector = parameter_vector[start_index:end_index]
-    sample.append(torch.Tensor(biases_vector).cuda())
-    start_index = start_index + model.hidden_sizes[0]
-    for i in range(len(model.hidden_sizes)-1): 
-        end_index = end_index + model.hidden_sizes[i]*model.hidden_sizes[i+1]
+    def unpack_sample(self, parameter_vector):
+        """convert a numpy vector of parameters to a list of parameter tensors"""
+        sample = []
+        start_index = 0
+        end_index = 0   
+        # unpack first weight matrix and bias
+        end_index = end_index + self.hidden_sizes[0]*self.dim_input
         weight_vector = parameter_vector[start_index:end_index]
-        weight_matrix = weight_vector.reshape((model.hidden_sizes[i+1], model.hidden_sizes[i]))
+        weight_matrix = weight_vector.reshape((self.hidden_sizes[0], self.dim_input))
         sample.append(torch.Tensor(weight_matrix).cuda())
-        start_index = start_index + model.hidden_sizes[i]*model.hidden_sizes[i+1]
-        end_index = end_index + model.hidden_sizes[i+1]
+        start_index = start_index + self.hidden_sizes[0]*self.dim_input
+        end_index = end_index + self.hidden_sizes[0]
         biases_vector = parameter_vector[start_index:end_index]
         sample.append(torch.Tensor(biases_vector).cuda())
-        start_index = start_index + model.hidden_sizes[i+1]
-    # unpack output weight matrix and bias
-    end_index = end_index + model.hidden_sizes[-1]
-    weight_vector = parameter_vector[start_index:end_index]
-    weight_matrix = weight_vector.reshape((1, model.hidden_sizes[-1]))
-    sample.append(torch.Tensor(weight_matrix).cuda())
-    start_index = start_index + model.hidden_sizes[-1]
-    biases_vector = parameter_vector[start_index:] # should reach the end of the parameters vector at this point
-    sample.append(torch.Tensor(biases_vector).cuda())
-    return sample
+        start_index = start_index + self.hidden_sizes[0]
+        for i in range(len(self.hidden_sizes)-1): 
+            end_index = end_index + self.hidden_sizes[i]*self.hidden_sizes[i+1]
+            weight_vector = parameter_vector[start_index:end_index]
+            weight_matrix = weight_vector.reshape((self.hidden_sizes[i+1], self.hidden_sizes[i]))
+            sample.append(torch.Tensor(weight_matrix).cuda())
+            start_index = start_index + self.hidden_sizes[i]*self.hidden_sizes[i+1]
+            end_index = end_index + self.hidden_sizes[i+1]
+            biases_vector = parameter_vector[start_index:end_index]
+            sample.append(torch.Tensor(biases_vector).cuda())
+            start_index = start_index + self.hidden_sizes[i+1]
+        # unpack output weight matrix and bias
+        end_index = end_index + self.hidden_sizes[-1]
+        weight_vector = parameter_vector[start_index:end_index]
+        weight_matrix = weight_vector.reshape((1, self.hidden_sizes[-1]))
+        sample.append(torch.Tensor(weight_matrix).cuda())
+        start_index = start_index + self.hidden_sizes[-1]
+        biases_vector = parameter_vector[start_index:] # should reach the end of the parameters vector at this point
+        sample.append(torch.Tensor(biases_vector).cuda())
+        return sample
 
 def plot_cov(cov, directory, title=''):
     # plot covariance of Gaussian fit
@@ -358,6 +397,65 @@ def plot_cov(cov, directory, title=''):
     fig.savefig(filepath)
     plt.close()
 
+def sample_gaussian(model, L, inputs, labels, train_mean, train_sd, no_samples):
+    # inputs and labels assumed NOT normalised
+    # sample from the Gaussian with covariance matrix Ainv and mean equal to the MAP solution, then return the function evaluations
+    # scale the inputs
+    inputs = inputs - train_mean[:-1] 
+    inputs = inputs/train_sd[:-1]
+    
+    mean = torch.Tensor(model.get_parameter_vector()).cuda()
+    # use cholesky factor of the precision matrix to sample from Laplace posterior by backsolving
+    z = torch.cuda.FloatTensor(mean.shape[0], no_samples).normal_()   
+    sampled_parameters = torch.unsqueeze(mean,1) + torch.trtrs(z, L.transpose(0,1))[0] 
+    sampled_parameters = sampled_parameters.transpose(0,1).data.cpu().numpy()
+    # samples is a list of lists of tensors
+    samples = []
+    for i in range(no_samples):
+        # unpack the parameter vector into a list of parameter tensors
+        sample = model.unpack_sample(sampled_parameters[i,:])
+        samples.append(sample)
+
+    # fill the model with the sampled parameters and evaluate
+    all_outputs = torch.cuda.FloatTensor(inputs.shape[0], no_samples)
+    for i, sample in enumerate(samples):
+        j = 0 
+        for name, param in model.named_parameters():
+            if name != 'noise_var_param': # dont do laplace for noise variance
+                param.data = sample[j] # fill in the model with these weights
+                j=j+1
+        # forward pass through the sampled model
+        outputs = torch.squeeze(model(inputs))
+        # scale the outputs
+        outputs = outputs*train_sd[-1]
+        outputs = outputs + train_mean[-1]
+        all_outputs[:,i] = outputs
+    
+    # calculate summed log likelihoods for this batch of inputs
+    noise_var = model.get_noise_var(model.noise_var_param)
+    # scale the noise var because of the normalisation
+    noise_var = noise_var*(train_sd[-1]**2) 
+    error_term = ((all_outputs - torch.unsqueeze(labels,1))**2)/(2*noise_var) 
+    exponents = -torch.log(torch.Tensor([no_samples]).cuda()) - 0.5*torch.log(2*3.1415926536*noise_var) - error_term
+    LLs = torch.logsumexp(exponents, 1)
+    sum_LLs = torch.sum(LLs)
+
+    # put the old model parameters back, so that later optimisation is not affected
+    sample = model.unpack_sample(mean.data.cpu().numpy())
+    j = 0
+    for name, param in model.named_parameters():
+        if name != 'noise_var_param': # dont do laplace for noise variance
+            param.data = sample[j] # fill in the model with these weights
+            j=j+1
+
+    # calculate the quantities needed to plot calibration curves and get RMSEs
+    mean_prediction = torch.mean(all_outputs, 1)
+    squared_error = torch.sum((labels - mean_prediction)**2)
+    abs_errors = torch.abs(labels - mean_prediction)
+    variances = noise_var + torch.mean(all_outputs**2, 1) - mean_prediction**2
+
+    return sum_LLs, squared_error, abs_errors, variances 
+
 def evaluate(model, x_test, y_test, train_mean, train_sd, laplace=False, x_train_normalised=None, subsampling=None, validation=None, optimizer=None, directory=None, name=None):
     
     # evaluate the model on the test/validation set
@@ -377,10 +475,10 @@ def evaluate(model, x_test, y_test, train_mean, train_sd, laplace=False, x_train
     predictive_sds = np.zeros(testset_size)
     abs_errors = np.zeros(testset_size)
 
-    # invert A just once
-    if laplace == True and direct_invert == True:
-        Ainv = model.get_Ainv(x_train_normalised, optimizer)
-
+    # cholesky decompose A just once
+    if laplace == True and (direct_invert == True or sample == True):
+        L = model.get_L(x_train_normalised, optimizer)
+       
     for i in range(num_batches):
         if i != num_batches - 1: # this isn't the final batch
             # fetch a batch of test inputs
@@ -392,44 +490,56 @@ def evaluate(model, x_test, y_test, train_mean, train_sd, laplace=False, x_train
             labels = y_test[i*eval_batch_size:]
         actual_batch_size = labels.shape[0]
 
-        # scale the inputs because of the normalisation        
-        inputs = inputs - train_mean[:-1] # broadcast
-        inputs = inputs/train_sd[:-1] # broadcast
-        outputs = model(inputs)
-        # scale the outputs because of the normalisation
-        outputs = outputs*train_sd[-1]
-        outputs = outputs + train_mean[-1]
-        outputs = torch.squeeze(outputs)
+        if (laplace == True) and (sample == True): # monte carlo sample from the Gaussian
+            no_samples = 32
+            log_likelihood, squared_error, errors, variances = sample_gaussian(model, L, inputs, labels, train_mean, train_sd, no_samples)
+            sum_squared_error = sum_squared_error + squared_error
 
-        # calculate sum squared errors for this batch
-        squared_error = torch.sum((outputs - labels)**2)
-        sum_squared_error = sum_squared_error + squared_error
-
-        # calculate log likelihood for this batch      
-        if laplace == False: 
-            noise_var = model.get_noise_var(model.noise_var_param)
-            # scale the noise var because of the normalisation
-            noise_var = noise_var*(train_sd[-1]**2)            
-            log_likelihood = -0.5*actual_batch_size*torch.log(2*3.1415926536*noise_var) - (1/(2*noise_var))*squared_error
-        else: # do Laplace approximation
-            # get the predictive variances
-            if direct_invert == True:
-                predictive_var = model.linearised_laplace_direct(Ainv, inputs, optimizer)
-            else:
-                predictive_var = model.linearised_laplace(x_train_normalised, inputs, subsampling=subsampling, optimizer=optimizer)
-            # scale predictive var because of the normalisation
-            predictive_var = predictive_var*(train_sd[-1]**2)
-            sigma2_term = -0.5*torch.sum(torch.log(2*3.1415926536*predictive_var))
-            error_term = -torch.sum((1/(2*predictive_var))*((outputs - labels)**2))
-            log_likelihood = sigma2_term + error_term     
-            
             if i != num_batches - 1: # this isn't the final batch
-                predictive_sds[i*eval_batch_size:(i+1)*eval_batch_size] = np.sqrt(predictive_var.data.cpu().numpy())
-                abs_errors[i*eval_batch_size:(i+1)*eval_batch_size] = np.abs((outputs - labels).data.cpu().numpy())
+                predictive_sds[i*eval_batch_size:(i+1)*eval_batch_size] = np.sqrt(variances.data.cpu().numpy())
+                abs_errors[i*eval_batch_size:(i+1)*eval_batch_size] = errors.data.cpu().numpy()
             else:
-                predictive_sds[i*eval_batch_size:] = np.sqrt(predictive_var.data.cpu().numpy())
-                abs_errors[i*eval_batch_size:] = np.abs((outputs - labels).data.cpu().numpy())
-            #import pdb; pdb.set_trace()
+                predictive_sds[i*eval_batch_size:] = np.sqrt(variances.data.cpu().numpy())
+                abs_errors[i*eval_batch_size:] = errors.data.cpu().numpy()
+
+        else:
+            # scale the inputs because of the normalisation        
+            inputs = inputs - train_mean[:-1] # broadcast
+            inputs = inputs/train_sd[:-1] # broadcast
+            outputs = model(inputs)
+            # scale the outputs because of the normalisation
+            outputs = outputs*train_sd[-1]
+            outputs = outputs + train_mean[-1]
+            outputs = torch.squeeze(outputs)
+
+            # calculate sum squared errors for this batch
+            squared_error = torch.sum((outputs - labels)**2)
+            sum_squared_error = sum_squared_error + squared_error
+
+            # calculate log likelihood for this batch      
+            if laplace == False: 
+                noise_var = model.get_noise_var(model.noise_var_param)
+                # scale the noise var because of the normalisation
+                noise_var = noise_var*(train_sd[-1]**2)            
+                log_likelihood = -0.5*actual_batch_size*torch.log(2*3.1415926536*noise_var) - (1/(2*noise_var))*squared_error
+            else: # do Laplace approximation
+                # get the predictive variances
+                if direct_invert == True:
+                    predictive_var = model.linearised_laplace_direct_cholesky(L, inputs, optimizer)
+                else:
+                    predictive_var = model.linearised_laplace(x_train_normalised, inputs, subsampling=subsampling, optimizer=optimizer)
+                # scale predictive var because of the normalisation
+                predictive_var = predictive_var*(train_sd[-1]**2)
+                sigma2_term = -0.5*torch.sum(torch.log(2*3.1415926536*predictive_var))
+                error_term = -torch.sum((1/(2*predictive_var))*((outputs - labels)**2))
+                log_likelihood = sigma2_term + error_term     
+                
+                if i != num_batches - 1: # this isn't the final batch
+                    predictive_sds[i*eval_batch_size:(i+1)*eval_batch_size] = np.sqrt(predictive_var.data.cpu().numpy())
+                    abs_errors[i*eval_batch_size:(i+1)*eval_batch_size] = np.abs((outputs - labels).data.cpu().numpy())
+                else:
+                    predictive_sds[i*eval_batch_size:] = np.sqrt(predictive_var.data.cpu().numpy())
+                    abs_errors[i*eval_batch_size:] = np.abs((outputs - labels).data.cpu().numpy())
                     
         sum_log_likelihood = sum_log_likelihood + log_likelihood
 
@@ -446,7 +556,7 @@ def evaluate(model, x_test, y_test, train_mean, train_sd, laplace=False, x_train
         filepath = directory + '//calibration_' + name + '.pdf'
         fig.savefig(filepath)
         plt.close()
-    
+
     mean_squared_error = sum_squared_error/testset_size
     mean_ll = sum_log_likelihood/testset_size
 
@@ -497,127 +607,11 @@ def train(model, train_x, train_y, eval_x, eval_y, train_mean, train_sd, validat
                 if (epoch + 1) in no_epochs_range:
                     MAP_MSE, MAP_LL = evaluate(model, eval_x, eval_y, train_mean, train_sd, validation=True, optimizer=optimizer) # without laplace
                     lap_MSE, lap_LL = evaluate(model, eval_x, eval_y, train_mean, train_sd, laplace=True, x_train_normalised=train_x, subsampling=subsampling, validation=True, optimizer=optimizer) # with laplace
-                    results_dict = {'MAP_MSE':MAP_MSE, 'MAP_LL':MAP_LL, 'lap_LL':lap_LL, 'no_epochs':epoch + 1}
+                    results_dict = {'MAP_MSE':MAP_MSE, 'MAP_LL':MAP_LL, 'lap_MSE':lap_MSE, 'lap_LL':lap_LL, 'no_epochs':epoch + 1}
                     results_dict_list.append(results_dict)
 
     if early_stopping == True:
         return results_dict_list 
-
-def train_all(test, noise_variance, hidden_sizes, omega, activation_function, learned_noise_var, input_dim, noise_param_init, standard_normal_prior):
-    if test == True: # train on the train and val set combined, evaluate on test set
-        # train on various splits
-        for split in range(no_splits):
-            print('BEGINNING SPLIT {}'.format(split))
-            # dataset       
-            data_location = '..//vision//data//boston_housing_yarin//boston_housing' + str(split) + '.pkl'
-
-            # model
-            model = MLP(noise_variance, hidden_sizes, omega, activation=activation_function, learned_noise_var=learned_noise_var, input_dim=input_dim, noise_param_init=noise_param_init, standard_normal_prior=standard_normal_prior)
-            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            # Assume that we are on a CUDA machine, then this should print a CUDA device:
-            print(device)
-            model.to(device)
-            for param in model.parameters():
-                print(type(param.data), param.size())
-
-            # get dataset
-            with open(data_location, 'rb') as f:
-                train_set, train_set_normalised, val_set_normalised, test_set, train_mean, train_sd = pickle.load(f)
-
-            train_mean = torch.Tensor(train_mean).cuda()
-            train_sd = torch.Tensor(train_sd).cuda()
-
-            x_train_normalised = torch.Tensor(train_set_normalised[:,:-1]).cuda()
-            y_train_normalised = torch.Tensor(train_set_normalised[:,-1]).cuda()
-
-            x_val_normalised = torch.Tensor(val_set_normalised[:,:-1]).cuda()
-            y_val_normalised = torch.Tensor(val_set_normalised[:,-1]).cuda()
-
-            # concatenate train and val set
-            x_train_normalised = torch.cat((x_train_normalised, x_val_normalised), 0)
-            y_train_normalised = torch.cat((y_train_normalised, y_val_normalised), 0)
-
-            x_test = torch.Tensor(test_set[:,:-1]).cuda()
-            y_test = torch.Tensor(test_set[:,-1]).cuda()
-
-            optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-
-            # train the model, and print out the test set log likelihood when training
-            train(model, x_train_normalised, y_train_normalised, x_test, y_test, train_mean, train_sd, validation=False, minibatch_size=minibatch_size, no_epochs=no_epochs, subsampling=subsampling, optimizer=optimizer)
-            
-            # record the final TEST SET scores
-            MAP_MSE, MAP_LL = evaluate(model, x_test, y_test, train_mean, train_sd, validation=False, optimizer=optimizer) # without laplace
-            lap_MSE, lap_LL = evaluate(model, x_test, y_test, train_mean, train_sd, laplace=True, x_train_normalised=x_train_normalised, subsampling=subsampling, validation=False, optimizer=optimizer) # with laplace
-            all_RMSE[split] = torch.sqrt(MAP_MSE).data.cpu().numpy()
-            all_MAPLL[split] = MAP_LL.data.cpu().numpy()
-            all_lapLL[split] = lap_LL.data.cpu().numpy()
-
-    else: # train on train set, evaluate on val set,
-        # train on various splits
-        for split in range(no_splits):
-            print('BEGINNING SPLIT {}'.format(split))
-            # dataset       
-            data_location = '..//vision//data//boston_housing_yarin//boston_housing' + str(split) + '.pkl'
-
-            # model
-            model = MLP(noise_variance, hidden_sizes, omega, activation=activation_function, learned_noise_var=learned_noise_var, input_dim=input_dim, noise_param_init=noise_param_init, standard_normal_prior=standard_normal_prior)
-            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            # Assume that we are on a CUDA machine, then this should print a CUDA device:
-            print(device)
-            model.to(device)
-            for param in model.parameters():
-                print(type(param.data), param.size())
-
-            # get dataset
-            with open(data_location, 'rb') as f:
-                train_set, train_set_normalised, val_set_normalised, test_set, train_mean, train_sd = pickle.load(f)
-
-            train_mean = torch.Tensor(train_mean).cuda()
-            train_sd = torch.Tensor(train_sd).cuda()
-
-            x_train_normalised = torch.Tensor(train_set_normalised[:,:-1]).cuda()
-            y_train_normalised = torch.Tensor(train_set_normalised[:,-1]).cuda()
-
-            x_val_normalised = torch.Tensor(val_set_normalised[:,:-1]).cuda()
-            y_val_normalised = torch.Tensor(val_set_normalised[:,-1]).cuda()
-
-            x_test = torch.Tensor(test_set[:,:-1]).cuda()
-            y_test = torch.Tensor(test_set[:,-1]).cuda()
-
-            optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-
-            # train the model, and print out the validation set log likelihood when training
-            train(model, x_train_normalised, y_train_normalised, x_val_normalised, y_val_normalised, train_mean, train_sd, validation=True, minibatch_size=minibatch_size, no_epochs=no_epochs, subsampling=subsampling, optimizer=optimizer)
-            
-            # record the final VALIDATION SET scores
-            MAP_MSE, MAP_LL = evaluate(model, x_val_normalised, y_val_normalised, train_mean, train_sd, validation=True, optimizer=optimizer) # without laplace
-            lap_MSE, lap_LL = evaluate(model, x_val_normalised, y_val_normalised, train_mean, train_sd, laplace=True, x_train_normalised=x_train_normalised, subsampling=subsampling, validation=True, optimizer=optimizer) # with laplace
-            all_RMSE[split] = torch.sqrt(MAP_MSE).data.cpu().numpy()
-            all_MAPLL[split] = MAP_LL.data.cpu().numpy()
-            all_lapLL[split] = lap_LL.data.cpu().numpy()
-    
-    print('MSEs: {}'.format(all_RMSE))
-    print('MAP LLs: {}'.format(all_MAPLL))
-    print('lap LLs: {}'.format(all_lapLL))
-    print('avg MSE: {}'.format(np.mean(all_RMSE)))
-    print('MSE s.d.: {}'.format(np.std(all_RMSE)))
-    print('avg MAP LL: {}'.format(np.mean(all_MAPLL)))
-    print('MAP LL s.d.: {}'.format(np.std(all_MAPLL)))
-    print('avg lap LL: {}'.format(np.mean(all_lapLL)))
-    print('lap LL s.d.: {}'.format(np.std(all_lapLL)))
-
-    # save text file with results
-    file = open(directory + '/results.txt','w') 
-    file.write('MSEs: {} \n'.format(all_RMSE))
-    file.write('MAP LLs: {} \n'.format(all_MAPLL))
-    file.write('lap LLs: {} \n'.format(all_lapLL))
-    file.write('avg MSE: {} \n'.format(np.mean(all_RMSE)))
-    file.write('MSE s.d.: {} \n'.format(np.std(all_RMSE)))
-    file.write('avg MAP LL: {} \n'.format(np.mean(all_MAPLL)))
-    file.write('MAP LL s.d.: {} \n'.format(np.std(all_MAPLL)))
-    file.write('avg lap LL: {} \n'.format(np.mean(all_lapLL)))
-    file.write('lap LL s.d.: {} \n'.format(np.std(all_lapLL)))
-    file.close() 
 
 def individual_train(data_location, test, noise_variance, hidden_sizes, omega, activation_function, learned_noise_var, input_dim, noise_param_init, learning_rate, no_epochs, standard_normal_prior, results_dir=None, split=None, early_stopping=False):
     """if early_stopping == True, expect no_epochs to be a list. Else it should be an int"""
@@ -661,7 +655,7 @@ def individual_train(data_location, test, noise_variance, hidden_sizes, omega, a
         train(model, x_train_normalised, y_train_normalised, x_test, y_test, train_mean, train_sd, validation=False, minibatch_size=minibatch_size, no_epochs=no_epochs, subsampling=subsampling, optimizer=optimizer)
         MAP_MSE, MAP_LL = evaluate(model, x_test, y_test, train_mean, train_sd, validation=False, optimizer=optimizer) # without laplace
         lap_MSE, lap_LL = evaluate(model, x_test, y_test, train_mean, train_sd, laplace=True, x_train_normalised=x_train_normalised, subsampling=subsampling, validation=False, optimizer=optimizer, directory=results_dir, name=str(split)) # with laplace
-        return MAP_MSE, MAP_LL, lap_LL
+        return MAP_MSE, MAP_LL, lap_LL, lap_MSE
 
     else: # this is validation time, do early stopping for hyperparam search
         results_dict_list = train(model, x_train_normalised, y_train_normalised, x_val_normalised, y_val_normalised, train_mean, train_sd, validation=True, minibatch_size=minibatch_size, no_epochs=no_epochs, subsampling=subsampling, optimizer=optimizer, early_stopping=True)
@@ -674,13 +668,14 @@ def individual_tune_train(results_dir, standard_normal_prior, activation_functio
     # create array of values to grid search over - but don't repeat searches when doing early stopping
     list_hypers = [omega_range, learning_rate_range]
     hyperparams = cartesian(list_hypers)
-    RMSEs = np.zeros(no_splits)
+    MAP_RMSEs = np.zeros(no_splits)
+    lap_RMSEs = np.zeros(no_splits)
     MAP_LLs = np.zeros(no_splits)
     lap_LLs = np.zeros(no_splits)
 
     for split in range(no_splits): 
         # find data location
-        data_location = '..//vision//data//energy_yarin//energy' + str(split) + '.pkl'
+        data_location = '..//vision//data//boston_housing_yarin//boston_housing' + str(split) + '.pkl'
         test = False # do hyperparam grid search on validation set
         for i in range(hyperparams.shape[0]):
             # get hyperparams
@@ -699,6 +694,7 @@ def individual_tune_train(results_dir, standard_normal_prior, activation_functio
                 file.write('omega, learning_rate: {} \n'.format(hyperparams[i,:]))
                 file.write('no_epochs: {} \n'.format(results_dict['no_epochs']))
                 file.write('MAP_RMSE: {} \n'.format(torch.sqrt(results_dict['MAP_MSE'])))
+                file.write('lap_RMSE: {} \n'.format(torch.sqrt(results_dict['lap_MSE'])))
                 file.write('MAP_LL: {} \n'.format(results_dict['MAP_LL']))
                 file.write('lap_LL: {} \n'.format(results_dict['lap_LL']))
                 file.close() 
@@ -728,8 +724,9 @@ def individual_tune_train(results_dir, standard_normal_prior, activation_functio
         learning_rate = best_hyperparams[1]
         no_epochs = best_no_epochs
 
-        MAP_MSE, MAP_LL, lap_LL = individual_train(data_location, test, noise_variance, hidden_sizes, omega, activation_function, learned_noise_var, input_dim, noise_param_init, learning_rate, no_epochs, standard_normal_prior, results_dir, split)
-        RMSEs[split] = torch.sqrt(MAP_MSE).data.cpu().numpy()
+        MAP_MSE, MAP_LL, lap_LL, lap_MSE = individual_train(data_location, test, noise_variance, hidden_sizes, omega, activation_function, learned_noise_var, input_dim, noise_param_init, learning_rate, no_epochs, standard_normal_prior, results_dir, split)
+        MAP_RMSEs[split] = torch.sqrt(MAP_MSE).data.cpu().numpy()
+        lap_RMSEs[split] = torch.sqrt(lap_MSE).data.cpu().numpy()
         MAP_LLs[split] = MAP_LL.data.cpu().numpy()
         lap_LLs[split] = lap_LL.data.cpu().numpy()
         
@@ -739,14 +736,17 @@ def individual_tune_train(results_dir, standard_normal_prior, activation_functio
         file.write('omega: {} \n'.format(omega))
         file.write('learning_rate: {} \n'.format(learning_rate))
         file.write('no_epochs: {} \n'.format(no_epochs))
-        file.write('test_RMSE: {} \n'.format(RMSEs[split]))
+        file.write('test_MAP_RMSE: {} \n'.format(MAP_RMSEs[split]))
+        file.write('test_lap_RMSE: {} \n'.format(lap_RMSEs[split]))
         file.write('test_MAP_LL: {} \n'.format(MAP_LLs[split]))
         file.write('test_lap_LL: {} \n'.format(lap_LLs[split]))
         file.close() 
 
     # find the mean and std error of the RMSEs and LLs
-    mean_RMSE = np.mean(RMSEs)
-    sd_RMSE = np.std(RMSEs)
+    mean_MAP_RMSE = np.mean(MAP_RMSEs)
+    sd_MAP_RMSE = np.std(MAP_RMSEs)
+    mean_lap_RMSE = np.mean(lap_RMSEs)
+    sd_lap_RMSE = np.std(lap_RMSEs)
     mean_MAP_LL = np.mean(MAP_LLs)
     sd_MAP_LL = np.std(MAP_LLs)
     mean_lap_LL = np.mean(lap_LLs)
@@ -754,11 +754,14 @@ def individual_tune_train(results_dir, standard_normal_prior, activation_functio
 
     # save the answer
     file = open(results_dir + '/test_results.txt','w') 
-    file.write('RMSEs: {} \n'.format(RMSEs))
+    file.write('MAP_RMSEs: {} \n'.format(MAP_RMSEs))
+    file.write('lap_RMSEs: {} \n'.format(lap_RMSEs))
     file.write('MAP_LLs: {} \n'.format(MAP_LLs))
     file.write('lap_LLs: {} \n'.format(lap_LLs))
-    file.write('mean_RMSE: {} \n'.format(mean_RMSE))
-    file.write('sd_RMSE: {} \n'.format(sd_RMSE))
+    file.write('mean_MAP_RMSE: {} \n'.format(mean_MAP_RMSE))
+    file.write('sd_MAP_RMSE: {} \n'.format(sd_MAP_RMSE))
+    file.write('mean_lap_RMSE: {} \n'.format(mean_lap_RMSE))
+    file.write('sd_lap_RMSE: {} \n'.format(sd_lap_RMSE))
     file.write('mean_MAP_LL: {} \n'.format(mean_MAP_LL))
     file.write('sd_MAP_LL: {} \n'.format(sd_MAP_LL))
     file.write('mean_lap_LL: {} \n'.format(mean_lap_LL))
@@ -774,6 +777,7 @@ if __name__ == "__main__":
 
     # hyperparameters
     no_splits = 20
+    sample = True
     direct_invert = False
     standard_normal_prior = True
     activation_function = torch.tanh
@@ -784,18 +788,18 @@ if __name__ == "__main__":
     learned_noise_var = True
     minibatch_size = 100
     no_epochs = 400
-    input_dim = 8
-    subsampling = 100
+    input_dim = 13
+    subsampling = None
     noise_param_init = -1
     test = False
-    directory = './/experiments//energy_yarin//subsampling'
-
-    omega_range = [1.0, 2.0, 4.0]
+    directory = './/experiments//boston_housing_yarin//sample'
+    omega_range = [1.0, 2.0, 4.0, 8.0]
     learning_rate_range = [0.01, 0.005, 0.001]
-    no_epochs_range = [40, 100, 200]
+    no_epochs_range = [40, 100, 200, 400, 1000]
 
     # save text file with hyperparameters
     file = open(directory + '/hyperparameters.txt','w') 
+    file.write('sample: {} \n'.format(sample))
     file.write('direct_invert: {} \n'.format(direct_invert))
     file.write('standard_normal_prior: {} \n'.format(standard_normal_prior))
     file.write('activation_function: {} \n'.format(activation_function.__name__))
@@ -818,144 +822,9 @@ if __name__ == "__main__":
     all_MAPLL = np.zeros(no_splits)
     all_lapLL = np.zeros(no_splits)
 
-    #train_all(test, noise_variance, hidden_sizes, omega, activation_function, learned_noise_var, input_dim, noise_param_init, standard_normal_prior)
-
     individual_tune_train(directory, standard_normal_prior, activation_function, hidden_sizes, omega_range, learning_rate_range, minibatch_size, no_epochs_range, input_dim, subsampling, noise_param_init)  
 
-    ############################################
-
-    # evaluate the model on the test set
-    # MAP_MSE, MAP_LL = evaluate(model, x_test, y_test, train_mean, train_sd, validation=False) # without laplace
-    # lap_MSE, lap_NLL = evaluate(model, x_test, y_test, train_mean, train_sd, laplace=True, x_train_normalised=x_train_normalised, subsampling=None, validation=False) # with laplace
-    # print('test MAP_RMSE: {}'.format(torch.sqrt(MAP_MSE)))
-    # print('test MAP_LL: {}'.format(MAP_LL))
-    # print('test lap_MSE: {}'.format(torch.sqrt(lap_MSE)))
-    # print('test lap_NLL: {}'.format(lap_NLL))
-
-    ############################################
-        
-    # # Laplace approximation
-    # MAP = model.get_parameter_vector()
-
-    # # get the fit using woodbury identity
-    # # evaluate model on test points
-    # N = 100 # number of test points
-    # x_lower = -3
-    # x_upper = 3
-    # test_inputs_np = np.linspace(x_lower, x_upper, N)
-    # # move to GPU if available
-    # test_inputs = torch.FloatTensor(test_inputs_np)
-    # test_inputs = test_inputs.cuda(async=True)
-    # test_inputs = torch.unsqueeze(test_inputs, 1) 
-
-    # predictive_mean = model(test_inputs)
-
-    # ##########################################
-    # # use O(no_data^3) matrix inversion
-
-    # # dont subsample
-    # predictive_var = model.linearised_laplace(x_train, test_inputs)
-    # predictive_sd = torch.sqrt(predictive_var)
-    # # plot
-    # plot(test_inputs, predictive_mean, predictive_sd, directory)
-
-    # # subsample and plot
-    # for num_subsamples in [100, 70, 40, 20, 10, 5, 4, 3, 2, 1]:
-    #     predictive_var = model.linearised_laplace(x_train, test_inputs, num_subsamples)
-    #     predictive_sd = torch.sqrt(predictive_var)
-    #     # plot
-    #     plot(test_inputs, predictive_mean, predictive_sd, directory, title = '_subsample_' + str(num_subsamples))
-
-    ##########################################
-
-    # # get the fit without any subsampling
-    # # get H
-    # H = get_H(model, x_train, subsample=False, num_subsamples=None)
-    # # print out the outer product Hessian
-    # plot_cov(H.data.cpu().numpy(), directory, title='Hessian_outer_product_')
-
-    # # get prior contribution to Hessian
-    # P_vector = model.get_P_vector()
-    # P = torch.diag(P_vector)
-    # # calculate and invert (negative) Hessian of posterior
-    # A = (1/model.noise_variance)*H + P 
-    # Ainv = torch.inverse(A)    
-    # # plot regression with error bars using linearisation
-    # plot_reg(model, data_load, directory, iter_number=no_iters, linearise=True, Ainv=Ainv)
-    # # plot covariance and correlation matrix
-    # plot_cov(Ainv.data.cpu().numpy(), directory)
-
-    ###########################################
-    # try SVD's of different ranks
-
-    # for R in [1,2,3,4,5]:
-    #     # perform an SVD and keep only the R largest singular values
-    #     U,S,V = torch.svd(H)
-    #     H_approx = torch.zeros(model.no_params, model.no_params).cuda()
-    #     for i in range(R):
-    #         H_approx.add_(U[:,i].unsqueeze(1)*V[:,i].unsqueeze(0)*S[i])
-    #     plot_cov(H_approx.data.cpu().numpy(), directory, title='Hessian_SVD_rank_' + str(R))
-
-    #     # get prior contribution to Hessian
-    #     P_vector = model.get_P_vector()
-    #     P = torch.diag(P_vector)
-    #     # calculate and invert (negative) Hessian of posterior
-    #     A = (1/model.noise_variance)*H_approx + P 
-    #     Ainv = torch.inverse(A)    
-    #     # plot regression with error bars using linearisation
-    #     plot_reg(model, data_load, directory, iter_number=no_iters, linearise=True, Ainv=Ainv, title='SVD_rank_' + str(R))
-    #     # plot covariance and correlation matrix
-    #     plot_cov(Ainv.data.cpu().numpy(), directory)
-
-    ###########################################
-
-    # # try minibatching
-    # H = get_H(model, x_train, subsample=None, num_subsamples=None, minibatch=True, batch_size=100, no_batches=1)
-    # # print out the outer product Hessian
-    # plot_cov(H.data.cpu().numpy(), directory, title='Hessian_OP_minibatch_')
-    # # calculate and invert (negative) Hessian of posterior
-    # A = (1/model.noise_variance)*H + P 
-    # Ainv = torch.inverse(A)    
-    # # plot regression with error bars using linearisation
-    # plot_reg(model, data_load, directory, iter_number=no_iters, linearise=True, Ainv=Ainv, title='minibatching')
-    # # plot covariance and correlation matrix
-    # plot_cov(Ainv.data.cpu().numpy(), directory)
-
-    ###########################################
-
-    # # get the fits with subsampling
-    # for subsampling in [1, 2, 3, 5, 10, 20, 50, 70, 100]:
-    #     # get H
-    #     H = get_H(model, x_train, subsample=True, num_subsamples=subsampling)
-    #     # print out the outer product Hessian
-    #     plot_cov(H.data.cpu().numpy(), directory, title='Hessian_OP_subsampling_' + str(subsampling) + '_')
-    #     # calculate and invert (negative) Hessian of posterior
-    #     A = (1/model.noise_variance)*H + P 
-    #     Ainv = torch.inverse(A)    
-    #     # plot regression with error bars using linearisation
-    #     plot_reg(model, data_load, directory, iter_number=no_iters, linearise=True, Ainv=Ainv, title='subsampling_' + str(subsampling))
-    #     # plot covariance and correlation matrix
-    #     plot_cov(Ainv.data.cpu().numpy(), directory)
-
-    ##########################################
-
-    # # find the eigenvalues of A
-    # w, v = LA.eig(A.data.cpu().numpy())
-    # w = np.sort(w)
-    # print('eigenvalues: {}'.format(w))
-
-    # # print the Jacobian
-    # model.linearised_laplace(x_train, None)
-
-    # print out A
-    # plot_cov(A.data.cpu().numpy(), directory, title='A_')
-
-    # plot regression with error bars using sampling  
-    # for covscale in [1, 0.5, 0.1, 0.05, 0.01, 0.005, 0.001]:
-    #    plot_reg(model, data_load, directory, iter_number=no_iters, linearise=False, Ainv=Ainv, sampling=True, covscale=covscale, mean=MAP)
-
     
-
 
 
     

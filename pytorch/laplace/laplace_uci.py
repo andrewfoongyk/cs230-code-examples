@@ -491,7 +491,7 @@ def evaluate(model, x_test, y_test, train_mean, train_sd, laplace=False, x_train
         actual_batch_size = labels.shape[0]
 
         if (laplace == True) and (sample == True): # monte carlo sample from the Gaussian
-            no_samples = 32
+            no_samples = no_samples_laplace
             log_likelihood, squared_error, errors, variances = sample_gaussian(model, L, inputs, labels, train_mean, train_sd, no_samples)
             sum_squared_error = sum_squared_error + squared_error
 
@@ -661,7 +661,7 @@ def individual_train(data_location, test, noise_variance, hidden_sizes, omega, a
         results_dict_list = train(model, x_train_normalised, y_train_normalised, x_val_normalised, y_val_normalised, train_mean, train_sd, validation=True, minibatch_size=minibatch_size, no_epochs=no_epochs, subsampling=subsampling, optimizer=optimizer, early_stopping=True)
         return results_dict_list
 
-def individual_tune_train(results_dir, standard_normal_prior, activation_function, hidden_sizes, omega_range, learning_rate_range, minibatch_size, no_epochs_range, input_dim, subsampling, noise_param_init):
+def individual_tune_train(results_dir, standard_normal_prior, activation_function, hidden_sizes, omega_range, learning_rate_range, minibatch_size, no_epochs_range, input_dim, subsampling, noise_param_init, dataset):
     # do a grid search on each split separately, then evaluate on the test set
     # this grids over omega, minibatch_size and no_epochs
     
@@ -675,7 +675,7 @@ def individual_tune_train(results_dir, standard_normal_prior, activation_functio
 
     for split in range(no_splits): 
         # find data location
-        data_location = '..//vision//data//boston_housing_yarin//boston_housing' + str(split) + '.pkl'
+        data_location = '..//vision//data//' + dataset + '_yarin//' + dataset + str(split) + '.pkl'
         test = False # do hyperparam grid search on validation set
         for i in range(hyperparams.shape[0]):
             # get hyperparams
@@ -775,54 +775,57 @@ if __name__ == "__main__":
     np.random.seed(seed) 
     torch.manual_seed(seed) 
 
+    # this doesnt include boston housing, and it uses the 'uncleaned' version of naval
+    input_dims = {'boston_housing': 13, 'concrete': 8, 'energy': 8, 'kin8nm': 8, 'power': 4, 'protein': 9, 'wine': 11, 'yacht': 6, 'naval': 16}
+    datasets = ['boston_housing', 'concrete', 'energy', 'kin8nm', 'power', 'protein', 'wine', 'yacht', 'naval']
+
     # hyperparameters
-    no_splits = 20
     sample = True
-    direct_invert = False
+    direct_invert = True
     standard_normal_prior = True
     activation_function = torch.tanh
-    noise_variance = 0.01
-    hidden_sizes = [50, 50]
-    omega = 4
-    learning_rate = 0.01
+    hidden_sizes = [50]
+    no_samples_laplace = 100
     learned_noise_var = True
     minibatch_size = 100
-    no_epochs = 400
-    input_dim = 13
     subsampling = None
     noise_param_init = -1
-    test = False
-    directory = './/experiments//boston_housing_yarin//sample'
-    omega_range = [1.0, 2.0, 4.0, 8.0]
-    learning_rate_range = [0.01, 0.005, 0.001]
-    no_epochs_range = [40, 100, 200, 400, 1000]
 
-    # save text file with hyperparameters
-    file = open(directory + '/hyperparameters.txt','w') 
-    file.write('sample: {} \n'.format(sample))
-    file.write('direct_invert: {} \n'.format(direct_invert))
-    file.write('standard_normal_prior: {} \n'.format(standard_normal_prior))
-    file.write('activation_function: {} \n'.format(activation_function.__name__))
-    file.write('seed: {} \n'.format(seed))
-    file.write('hidden_sizes: {} \n'.format(hidden_sizes))
-    file.write('omega: {} \n'.format(omega))
-    file.write('learning_rate: {} \n'.format(learning_rate))
-    file.write('learned_noise_var: {} \n'.format(learned_noise_var))
-    file.write('minibatch_size: {} \n'.format(minibatch_size))
-    file.write('no_epochs: {} \n'.format(no_epochs))
-    file.write('subsampling: {} \n'.format(subsampling))
-    file.write('noise_param_init: {} \n'.format(noise_param_init))
-    file.write('test: {} \n'.format(test))
-    file.write('omega_range: {} \n'.format(omega_range))
-    file.write('learning_rate_range: {} \n'.format(learning_rate_range))
-    file.write('no_epochs_range: {} \n'.format(no_epochs_range))
-    file.close() 
+    for dataset in datasets: 
+        if dataset == 'protein':
+            no_splits = 5
+        else:
+            no_splits = 20
 
-    all_RMSE = np.zeros(no_splits)
-    all_MAPLL = np.zeros(no_splits)
-    all_lapLL = np.zeros(no_splits)
+        directory = './/experiments//' + dataset + '_yarin//sample_Feb22'
+        input_dim = input_dims[dataset]
+        omega_range = [1.0, 2.0, 4.0]
+        learning_rate_range = [0.01, 0.005, 0.001]
+        no_epochs_range = [40, 100, 200]
 
-    individual_tune_train(directory, standard_normal_prior, activation_function, hidden_sizes, omega_range, learning_rate_range, minibatch_size, no_epochs_range, input_dim, subsampling, noise_param_init)  
+        # save text file with hyperparameters
+        file = open(directory + '/hyperparameters.txt','w') 
+        file.write('sample: {} \n'.format(sample))
+        file.write('no_samples_laplace: {} \n'.format(no_samples_laplace))
+        file.write('direct_invert: {} \n'.format(direct_invert))
+        file.write('standard_normal_prior: {} \n'.format(standard_normal_prior))
+        file.write('activation_function: {} \n'.format(activation_function.__name__))
+        file.write('seed: {} \n'.format(seed))
+        file.write('hidden_sizes: {} \n'.format(hidden_sizes))
+        file.write('learned_noise_var: {} \n'.format(learned_noise_var))
+        file.write('minibatch_size: {} \n'.format(minibatch_size))
+        file.write('subsampling: {} \n'.format(subsampling))
+        file.write('noise_param_init: {} \n'.format(noise_param_init))
+        file.write('omega_range: {} \n'.format(omega_range))
+        file.write('learning_rate_range: {} \n'.format(learning_rate_range))
+        file.write('no_epochs_range: {} \n'.format(no_epochs_range))
+        file.close() 
+
+        all_RMSE = np.zeros(no_splits)
+        all_MAPLL = np.zeros(no_splits)
+        all_lapLL = np.zeros(no_splits)
+
+        individual_tune_train(directory, standard_normal_prior, activation_function, hidden_sizes, omega_range, learning_rate_range, minibatch_size, no_epochs_range, input_dim, subsampling, noise_param_init, dataset)  
 
     
 

@@ -31,15 +31,15 @@ class MLP(nn.Module):
         self.omega = float(omega)
         self.learned_noise_var = learned_noise_var
         if learned_noise_var == False:
-            self.noise_variance = torch.Tensor([noise_variance]).cuda()
+            self.noise_variance = torch.cuda.DoubleTensor([noise_variance])
         else:
             # self.noise_var_param = nn.Parameter(torch.Tensor([-5]).cuda()) # this seemed to work OK
-            self.noise_var_param = nn.Parameter(torch.Tensor([noise_param_init]).cuda())
+            self.noise_var_param = nn.Parameter(torch.cuda.DoubleTensor([noise_param_init]))
             self.noise_variance = self.get_noise_var(self.noise_var_param)
         self.hidden_sizes = hidden_sizes
-        self.linears = nn.ModuleList([nn.Linear(input_dim, self.hidden_sizes[0])])
-        self.linears.extend([nn.Linear(self.hidden_sizes[i], self.hidden_sizes[i+1]) for i in range(0, len(self.hidden_sizes)-1)])
-        self.linears.append(nn.Linear(self.hidden_sizes[-1], 1))
+        self.linears = nn.ModuleList([nn.Linear(input_dim, self.hidden_sizes[0]).double()])
+        self.linears.extend([nn.Linear(self.hidden_sizes[i], self.hidden_sizes[i+1]).double() for i in range(0, len(self.hidden_sizes)-1)])
+        self.linears.append(nn.Linear(self.hidden_sizes[-1], 1).double())
         print(self.linears)
 
         # calculate number of parameters in network
@@ -101,7 +101,7 @@ class MLP(nn.Module):
         output.backward()
 
         # fill gradient values into a single vector
-        gradient = torch.cuda.FloatTensor(self.no_params).fill_(0)
+        gradient = torch.cuda.DoubleTensor(self.no_params).fill_(0)
         start_index = 0
         for name, param in self.named_parameters():
             if name != 'noise_var_param': # dont do laplace for noise variance
@@ -128,7 +128,7 @@ class MLP(nn.Module):
 
     def get_P_vector(self):
         # get prior contribution to the Hessian
-        P_vector = torch.cuda.FloatTensor(self.no_params).fill_(0)
+        P_vector = torch.cuda.DoubleTensor(self.no_params).fill_(0)
         P_vector[:self.dim_input*self.hidden_sizes[0]] = self.dim_input/(self.omega**2) # first weight matrix
         start_index = self.dim_input*self.hidden_sizes[0]
         for i in range(len(self.hidden_sizes) - 1):
@@ -157,7 +157,7 @@ class MLP(nn.Module):
     def get_H(self, x_train, optimizer=None):
         # create 'sum of outer products' matrix
         # try subsampling or minibatching this 
-        H = torch.cuda.FloatTensor(self.no_params, self.no_params).fill_(0)
+        H = torch.cuda.DoubleTensor(self.no_params, self.no_params).fill_(0)
         for i in range(x_train.size()[0]): # for all training inputs
             # clear gradients
             optimizer.zero_grad()
@@ -192,7 +192,7 @@ class MLP(nn.Module):
         
         # get list of test gradients
         no_test = test_inputs.size()[0]
-        G = torch.cuda.FloatTensor(self.no_params, no_test).fill_(0)
+        G = torch.cuda.DoubleTensor(self.no_params, no_test).fill_(0)
         for i in range(no_test):
             # clear gradients
             optimizer.zero_grad()
@@ -209,7 +209,6 @@ class MLP(nn.Module):
         AinvG = torch.matmul(Ainv, Gbatch)
         gtAinvg = torch.squeeze(torch.matmul(Gt, AinvG))
 
-        #import pdb; pdb.set_trace()
         print('noise_var: {}'.format(noise_variance))
         print('gtAinvg: {}'.format(gtAinvg))
 
@@ -230,8 +229,8 @@ class MLP(nn.Module):
         # symmetrise in case numerical issues
         A = (A + A.transpose(0,1))/2
         # jitter A
-        A = A + torch.eye(self.no_params).cuda()*A[0,0]*1e-6 
-        # cholesky decompose ############ why does this fail for naval??????
+        A = A + torch.eye(self.no_params).double().cuda()*1e-6 
+        # cholesky decompose 
         L = torch.potrf(A, upper=False) # lower triangular decomposition
         return L.detach()
 
@@ -244,7 +243,7 @@ class MLP(nn.Module):
 
         # get list of test gradients
         no_test = test_inputs.size()[0]
-        G = torch.cuda.FloatTensor(self.no_params, no_test).fill_(0)
+        G = torch.cuda.DoubleTensor(self.no_params, no_test).fill_(0)
         for i in range(no_test):
             # clear gradients
             optimizer.zero_grad()
@@ -270,7 +269,7 @@ class MLP(nn.Module):
         if subsampling == None: # don't subsample
             # form Jacobian matrix of train set, Z - use a for loop for now?
             no_train = train_inputs.size()[0]
-            Z = torch.cuda.FloatTensor(no_train, self.no_params).fill_(0)
+            Z = torch.cuda.DoubleTensor(no_train, self.no_params).fill_(0)
             for i in range(no_train):
                 # clear gradients
                 optimizer.zero_grad()
@@ -282,7 +281,7 @@ class MLP(nn.Module):
                 Z[i,:] = gradient
         else: # subsample the train set 
             no_train = subsampling
-            Z = torch.cuda.FloatTensor(no_train, self.no_params).fill_(0)    
+            Z = torch.cuda.DoubleTensor(no_train, self.no_params).fill_(0)    
             for i, sample in enumerate(np.random.choice(train_inputs.size()[0], no_train, replace=False)):
                 # clear gradients
                 optimizer.zero_grad()
@@ -295,7 +294,7 @@ class MLP(nn.Module):
 
         # get list of test gradients
         no_test = test_inputs.size()[0]
-        G = torch.cuda.FloatTensor(self.no_params, no_test).fill_(0)
+        G = torch.cuda.DoubleTensor(self.no_params, no_test).fill_(0)
         for i in range(no_test):
             # clear gradients
             optimizer.zero_grad()
@@ -323,7 +322,7 @@ class MLP(nn.Module):
         # symmetrize M - there may be numerical issues causing it to be non symmetric
         M = (M + M.transpose(0,1))/2
         # JITTER M
-        M = M + torch.eye(no_train).cuda()*M[0,0]*1e-6 ########
+        M = M + torch.eye(no_train).double().cuda()*1e-6 
           
         U = torch.potrf(M, upper=True) # upper triangular decomposition
 
@@ -350,30 +349,30 @@ class MLP(nn.Module):
         end_index = end_index + self.hidden_sizes[0]*self.dim_input
         weight_vector = parameter_vector[start_index:end_index]
         weight_matrix = weight_vector.reshape((self.hidden_sizes[0], self.dim_input))
-        sample.append(torch.Tensor(weight_matrix).cuda())
+        sample.append(torch.cuda.DoubleTensor(weight_matrix))
         start_index = start_index + self.hidden_sizes[0]*self.dim_input
         end_index = end_index + self.hidden_sizes[0]
         biases_vector = parameter_vector[start_index:end_index]
-        sample.append(torch.Tensor(biases_vector).cuda())
+        sample.append(torch.cuda.DoubleTensor(biases_vector))
         start_index = start_index + self.hidden_sizes[0]
         for i in range(len(self.hidden_sizes)-1): 
             end_index = end_index + self.hidden_sizes[i]*self.hidden_sizes[i+1]
             weight_vector = parameter_vector[start_index:end_index]
             weight_matrix = weight_vector.reshape((self.hidden_sizes[i+1], self.hidden_sizes[i]))
-            sample.append(torch.Tensor(weight_matrix).cuda())
+            sample.append(torch.cuda.DoubleTensor(weight_matrix))
             start_index = start_index + self.hidden_sizes[i]*self.hidden_sizes[i+1]
             end_index = end_index + self.hidden_sizes[i+1]
             biases_vector = parameter_vector[start_index:end_index]
-            sample.append(torch.Tensor(biases_vector).cuda())
+            sample.append(torch.cuda.DoubleTensor(biases_vector))
             start_index = start_index + self.hidden_sizes[i+1]
         # unpack output weight matrix and bias
         end_index = end_index + self.hidden_sizes[-1]
         weight_vector = parameter_vector[start_index:end_index]
         weight_matrix = weight_vector.reshape((1, self.hidden_sizes[-1]))
-        sample.append(torch.Tensor(weight_matrix).cuda())
+        sample.append(torch.cuda.DoubleTensor(weight_matrix))
         start_index = start_index + self.hidden_sizes[-1]
         biases_vector = parameter_vector[start_index:] # should reach the end of the parameters vector at this point
-        sample.append(torch.Tensor(biases_vector).cuda())
+        sample.append(torch.cuda.DoubleTensor(biases_vector))
         return sample
 
 def plot_cov(cov, directory, title=''):
@@ -404,9 +403,9 @@ def sample_gaussian(model, L, inputs, labels, train_mean, train_sd, no_samples):
     inputs = inputs - train_mean[:-1] 
     inputs = inputs/train_sd[:-1]
     
-    mean = torch.Tensor(model.get_parameter_vector()).cuda()
+    mean = torch.cuda.DoubleTensor(model.get_parameter_vector())
     # use cholesky factor of the precision matrix to sample from Laplace posterior by backsolving
-    z = torch.cuda.FloatTensor(mean.shape[0], no_samples).normal_()   
+    z = torch.cuda.DoubleTensor(mean.shape[0], no_samples).normal_()   
     sampled_parameters = torch.unsqueeze(mean,1) + torch.trtrs(z, L.transpose(0,1))[0] 
     sampled_parameters = sampled_parameters.transpose(0,1).data.cpu().numpy()
     # samples is a list of lists of tensors
@@ -417,7 +416,7 @@ def sample_gaussian(model, L, inputs, labels, train_mean, train_sd, no_samples):
         samples.append(sample)
 
     # fill the model with the sampled parameters and evaluate
-    all_outputs = torch.cuda.FloatTensor(inputs.shape[0], no_samples)
+    all_outputs = torch.cuda.DoubleTensor(inputs.shape[0], no_samples)
     for i, sample in enumerate(samples):
         j = 0 
         for name, param in model.named_parameters():
@@ -436,7 +435,7 @@ def sample_gaussian(model, L, inputs, labels, train_mean, train_sd, no_samples):
     # scale the noise var because of the normalisation
     noise_var = noise_var*(train_sd[-1]**2) 
     error_term = ((all_outputs - torch.unsqueeze(labels,1))**2)/(2*noise_var) 
-    exponents = -torch.log(torch.Tensor([no_samples]).cuda()) - 0.5*torch.log(2*3.1415926536*noise_var) - error_term
+    exponents = -torch.log(torch.cuda.DoubleTensor([no_samples])) - 0.5*torch.log(2*3.1415926536*noise_var) - error_term
     LLs = torch.logsumexp(exponents, 1)
     sum_LLs = torch.sum(LLs)
 
@@ -613,7 +612,9 @@ def train(model, train_x, train_y, eval_x, eval_y, train_mean, train_sd, validat
     if early_stopping == True:
         return results_dict_list 
 
-def individual_train(data_location, test, noise_variance, hidden_sizes, omega, activation_function, learned_noise_var, input_dim, noise_param_init, learning_rate, no_epochs, standard_normal_prior, results_dir=None, split=None, early_stopping=False):
+def individual_train(data_location, test, noise_variance, hidden_sizes, omega, activation_function, \
+    learned_noise_var, input_dim, noise_param_init, learning_rate, no_epochs, standard_normal_prior, \
+        minibatch_size, results_dir=None, split=None, early_stopping=False):
     """if early_stopping == True, expect no_epochs to be a list. Else it should be an int"""
     # reset seed for reproducibility
     # np.random.seed(seed) 
@@ -631,21 +632,21 @@ def individual_train(data_location, test, noise_variance, hidden_sizes, omega, a
     with open(data_location, 'rb') as f:
         train_set, train_set_normalised, val_set_normalised, test_set, train_mean, train_sd = pickle.load(f)
 
-    train_mean = torch.Tensor(train_mean).cuda()
-    train_sd = torch.Tensor(train_sd).cuda()
+    train_mean = torch.cuda.DoubleTensor(train_mean)
+    train_sd = torch.cuda.DoubleTensor(train_sd)
 
-    x_train_normalised = torch.Tensor(train_set_normalised[:,:-1]).cuda()
-    y_train_normalised = torch.Tensor(train_set_normalised[:,-1]).cuda()
+    x_train_normalised = torch.cuda.DoubleTensor(train_set_normalised[:,:-1])
+    y_train_normalised = torch.cuda.DoubleTensor(train_set_normalised[:,-1])
 
-    x_val_normalised = torch.Tensor(val_set_normalised[:,:-1]).cuda()
-    y_val_normalised = torch.Tensor(val_set_normalised[:,-1]).cuda()
+    x_val_normalised = torch.cuda.DoubleTensor(val_set_normalised[:,:-1])
+    y_val_normalised = torch.cuda.DoubleTensor(val_set_normalised[:,-1])
 
     if test == True: # combine train and val sets
         x_train_normalised = torch.cat((x_train_normalised, x_val_normalised), 0)
         y_train_normalised = torch.cat((y_train_normalised, y_val_normalised), 0)
 
-    x_test = torch.Tensor(test_set[:,:-1]).cuda()
-    y_test = torch.Tensor(test_set[:,-1]).cuda()
+    x_test = torch.cuda.DoubleTensor(test_set[:,:-1])
+    y_test = torch.cuda.DoubleTensor(test_set[:,-1])
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -661,12 +662,12 @@ def individual_train(data_location, test, noise_variance, hidden_sizes, omega, a
         results_dict_list = train(model, x_train_normalised, y_train_normalised, x_val_normalised, y_val_normalised, train_mean, train_sd, validation=True, minibatch_size=minibatch_size, no_epochs=no_epochs, subsampling=subsampling, optimizer=optimizer, early_stopping=True)
         return results_dict_list
 
-def individual_tune_train(results_dir, standard_normal_prior, activation_function, hidden_sizes, omega_range, learning_rate_range, minibatch_size, no_epochs_range, input_dim, subsampling, noise_param_init, dataset):
+def individual_tune_train(results_dir, standard_normal_prior, activation_function, hidden_sizes, omega_range, learning_rate_range, minibatch_size_range, no_epochs_range, input_dim, subsampling, noise_param_init, dataset):
     # do a grid search on each split separately, then evaluate on the test set
     # this grids over omega, minibatch_size and no_epochs
     
     # create array of values to grid search over - but don't repeat searches when doing early stopping
-    list_hypers = [omega_range, learning_rate_range]
+    list_hypers = [omega_range, learning_rate_range, minibatch_size_range]
     hyperparams = cartesian(list_hypers)
     MAP_RMSEs = np.zeros(no_splits)
     lap_RMSEs = np.zeros(no_splits)
@@ -682,16 +683,19 @@ def individual_tune_train(results_dir, standard_normal_prior, activation_functio
             copy_hyperparams = deepcopy(hyperparams)
             omega = copy_hyperparams[i,0]
             learning_rate = copy_hyperparams[i,1]
+            minibatch_size = int(copy_hyperparams[i,2])
 
             # train on one split, and validate            
             noise_variance = 0 # not using this parameter
             learned_noise_var = True # always true for UCI regression
-            results_dict_list = individual_train(data_location, test, noise_variance, hidden_sizes, omega, activation_function, learned_noise_var, input_dim, noise_param_init, learning_rate, no_epochs_range, standard_normal_prior, early_stopping=True)
+            results_dict_list = individual_train(data_location, test, noise_variance, hidden_sizes, omega, \
+                activation_function, learned_noise_var, input_dim, noise_param_init, learning_rate, no_epochs_range, \
+                    standard_normal_prior, minibatch_size, early_stopping=True)
             
             # save text file with results
             for results_dict in results_dict_list:
                 file = open(results_dir + '/results' + str(split) + '.txt','a') 
-                file.write('omega, learning_rate: {} \n'.format(hyperparams[i,:]))
+                file.write('omega, learning_rate, minibatch_size: {} \n'.format(hyperparams[i,:]))
                 file.write('no_epochs: {} \n'.format(results_dict['no_epochs']))
                 file.write('MAP_RMSE: {} \n'.format(torch.sqrt(results_dict['MAP_MSE'])))
                 file.write('lap_RMSE: {} \n'.format(torch.sqrt(results_dict['lap_MSE'])))
@@ -722,9 +726,12 @@ def individual_tune_train(results_dir, standard_normal_prior, activation_functio
         test = True # this is test time
         omega = best_hyperparams[0]
         learning_rate = best_hyperparams[1]
+        minibatch_size = int(best_hyperparams[2])
         no_epochs = best_no_epochs
 
-        MAP_MSE, MAP_LL, lap_LL, lap_MSE = individual_train(data_location, test, noise_variance, hidden_sizes, omega, activation_function, learned_noise_var, input_dim, noise_param_init, learning_rate, no_epochs, standard_normal_prior, results_dir, split)
+        MAP_MSE, MAP_LL, lap_LL, lap_MSE = individual_train(data_location, test, noise_variance, hidden_sizes,\
+             omega, activation_function, learned_noise_var, input_dim, noise_param_init, learning_rate, no_epochs,\
+                  standard_normal_prior, minibatch_size, results_dir, split)
         MAP_RMSEs[split] = torch.sqrt(MAP_MSE).data.cpu().numpy()
         lap_RMSEs[split] = torch.sqrt(lap_MSE).data.cpu().numpy()
         MAP_LLs[split] = MAP_LL.data.cpu().numpy()
@@ -736,6 +743,7 @@ def individual_tune_train(results_dir, standard_normal_prior, activation_functio
         file.write('omega: {} \n'.format(omega))
         file.write('learning_rate: {} \n'.format(learning_rate))
         file.write('no_epochs: {} \n'.format(no_epochs))
+        file.write('minibatch_size: {} \n'.format(minibatch_size))
         file.write('test_MAP_RMSE: {} \n'.format(MAP_RMSEs[split]))
         file.write('test_lap_RMSE: {} \n'.format(lap_RMSEs[split]))
         file.write('test_MAP_LL: {} \n'.format(MAP_LLs[split]))
@@ -775,19 +783,17 @@ if __name__ == "__main__":
     np.random.seed(seed) 
     torch.manual_seed(seed) 
 
-    # this doesnt include boston housing, and it uses the 'uncleaned' version of naval
     input_dims = {'boston_housing': 13, 'concrete': 8, 'energy': 8, 'kin8nm': 8, 'power': 4, 'protein': 9, 'wine': 11, 'yacht': 6, 'naval': 16}
-    datasets = ['boston_housing', 'concrete', 'energy', 'kin8nm', 'power', 'protein', 'wine', 'yacht', 'naval']
+    datasets = ['naval', 'boston_housing', 'concrete', 'energy', 'kin8nm', 'power', 'protein', 'wine', 'yacht']
 
     # hyperparameters
-    sample = True
+    sample = False
     direct_invert = True
     standard_normal_prior = True
     activation_function = torch.tanh
     hidden_sizes = [50]
     no_samples_laplace = 100
     learned_noise_var = True
-    minibatch_size = 100
     subsampling = None
     noise_param_init = -1
 
@@ -797,11 +803,13 @@ if __name__ == "__main__":
         else:
             no_splits = 20
 
-        directory = './/experiments//' + dataset + '_yarin//sample_Feb22'
+        directory = './/experiments//' + dataset + '_yarin//double_Mar22'
+        os.mkdir(directory)
         input_dim = input_dims[dataset]
-        omega_range = [1.0, 2.0, 4.0]
-        learning_rate_range = [0.01, 0.005, 0.001]
-        no_epochs_range = [40, 100, 200]
+        omega_range = [1.0, 2.0]
+        minibatch_size_range = [100]
+        learning_rate_range = [0.01, 0.001]
+        no_epochs_range = [40, 100, 200, 400]
 
         # save text file with hyperparameters
         file = open(directory + '/hyperparameters.txt','w') 
@@ -813,7 +821,7 @@ if __name__ == "__main__":
         file.write('seed: {} \n'.format(seed))
         file.write('hidden_sizes: {} \n'.format(hidden_sizes))
         file.write('learned_noise_var: {} \n'.format(learned_noise_var))
-        file.write('minibatch_size: {} \n'.format(minibatch_size))
+        file.write('minibatch_size_range: {} \n'.format(minibatch_size_range))
         file.write('subsampling: {} \n'.format(subsampling))
         file.write('noise_param_init: {} \n'.format(noise_param_init))
         file.write('omega_range: {} \n'.format(omega_range))
@@ -825,7 +833,7 @@ if __name__ == "__main__":
         all_MAPLL = np.zeros(no_splits)
         all_lapLL = np.zeros(no_splits)
 
-        individual_tune_train(directory, standard_normal_prior, activation_function, hidden_sizes, omega_range, learning_rate_range, minibatch_size, no_epochs_range, input_dim, subsampling, noise_param_init, dataset)  
+        individual_tune_train(directory, standard_normal_prior, activation_function, hidden_sizes, omega_range, learning_rate_range, minibatch_size_range, no_epochs_range, input_dim, subsampling, noise_param_init, dataset)  
 
     
 

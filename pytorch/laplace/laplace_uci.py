@@ -231,7 +231,7 @@ class MLP(nn.Module):
         # jitter A
         A = A + torch.eye(self.no_params).double().cuda()*1e-6 
         # cholesky decompose 
-        L = torch.potrf(A, upper=False) # lower triangular decomposition
+        L = torch.cholesky(A, upper=False) # lower triangular decomposition
         return L.detach()
 
     def linearised_laplace_direct_cholesky(self, L, test_inputs, optimizer=None):
@@ -324,7 +324,7 @@ class MLP(nn.Module):
         # JITTER M
         M = M + torch.eye(no_train).double().cuda()*1e-6 
           
-        U = torch.potrf(M, upper=True) # upper triangular decomposition
+        U = torch.cholesky(M, upper=True) # upper triangular decomposition
 
         # solve the triangular system
         V = torch.trtrs(ZPinvG, U, transpose=True)[0] # (no_train x no_test), some of the stuff might need transposing
@@ -559,7 +559,7 @@ def evaluate(model, x_test, y_test, train_mean, train_sd, laplace=False, x_train
     mean_squared_error = sum_squared_error/testset_size
     mean_ll = sum_log_likelihood/testset_size
 
-    return mean_squared_error, mean_ll[0]
+    return mean_squared_error, mean_ll.item()
 
 def train(model, train_x, train_y, eval_x, eval_y, train_mean, train_sd, validation=False, minibatch_size=None, no_epochs=None, subsampling=None, optimizer=None, early_stopping=False): 
     # if validation is true, expect eval_x and eval_y to be normalised as well
@@ -676,7 +676,10 @@ def individual_tune_train(results_dir, standard_normal_prior, activation_functio
 
     for split in range(no_splits): 
         # find data location
-        data_location = '..//vision//data//' + dataset + '_yarin//' + dataset + str(split) + '.pkl'
+        if gap == True:
+            data_location = '..//vision//data//' + dataset + '_gap//' + dataset + str(split) + '.pkl'
+        else:
+            data_location = '..//vision//data//' + dataset + '_yarin//' + dataset + str(split) + '.pkl'
         test = False # do hyperparam grid search on validation set
         for i in range(hyperparams.shape[0]):
             # get hyperparams
@@ -734,8 +737,9 @@ def individual_tune_train(results_dir, standard_normal_prior, activation_functio
                   standard_normal_prior, minibatch_size, results_dir, split)
         MAP_RMSEs[split] = torch.sqrt(MAP_MSE).data.cpu().numpy()
         lap_RMSEs[split] = torch.sqrt(lap_MSE).data.cpu().numpy()
-        MAP_LLs[split] = MAP_LL.data.cpu().numpy()
-        lap_LLs[split] = lap_LL.data.cpu().numpy()
+
+        MAP_LLs[split] = MAP_LL
+        lap_LLs[split] = lap_LL
         
         # record best hyperparams
         file = open(results_dir + '/best_hypers.txt','a') 
@@ -791,19 +795,23 @@ if __name__ == "__main__":
     direct_invert = True
     standard_normal_prior = True
     activation_function = torch.tanh
-    hidden_sizes = [50]
+    hidden_sizes = [50, 50]
     no_samples_laplace = 100
     learned_noise_var = True
     subsampling = None
     noise_param_init = -1
+    gap = True
 
     for dataset in datasets: 
-        if dataset == 'protein':
-            no_splits = 5
+        if gap == True:
+            no_splits = input_dims[dataset]
         else:
-            no_splits = 20
+            if dataset == 'protein':
+                no_splits = 5
+            else:
+                no_splits = 20
 
-        directory = './/experiments//' + dataset + '_yarin//double_Mar22'
+        directory = './/experiments//gap//' + dataset + '//Mar27_2HL'
         os.mkdir(directory)
         input_dim = input_dims[dataset]
         omega_range = [1.0, 2.0]

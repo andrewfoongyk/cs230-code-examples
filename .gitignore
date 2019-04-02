@@ -109,3 +109,9 @@ pytorch/vision/data
 pytorch/.vscode
 pytorch/data
 pytorch/pytorch_tutorial/data
+pytorch/HMC/experiments
+pytorch/GP/experiments
+pytorch/metaprior/experiments
+pytorch/laplace/experiments
+pytorch/MFVI/experiments
+pytorch/MFVI_analysis/experiments

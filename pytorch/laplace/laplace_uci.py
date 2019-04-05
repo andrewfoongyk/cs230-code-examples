@@ -453,7 +453,7 @@ def sample_gaussian(model, L, inputs, labels, train_mean, train_sd, no_samples):
     abs_errors = torch.abs(labels - mean_prediction)
     variances = noise_var + torch.mean(all_outputs**2, 1) - mean_prediction**2
 
-    return sum_LLs, squared_error, abs_errors, variances 
+    return sum_LLs.detach(), squared_error.detach(), abs_errors.detach(), variances.detach() # detach everything
 
 def evaluate(model, x_test, y_test, train_mean, train_sd, laplace=False, x_train_normalised=None, subsampling=None, validation=None, optimizer=None, directory=None, name=None):
     
@@ -556,8 +556,8 @@ def evaluate(model, x_test, y_test, train_mean, train_sd, laplace=False, x_train
         fig.savefig(filepath)
         plt.close()
 
-    mean_squared_error = sum_squared_error/testset_size
-    mean_ll = sum_log_likelihood/testset_size
+    mean_squared_error = sum_squared_error.detach()/testset_size # detach everything
+    mean_ll = sum_log_likelihood.detach()/testset_size
 
     return mean_squared_error, mean_ll.item()
 
@@ -788,10 +788,11 @@ if __name__ == "__main__":
     torch.manual_seed(seed) 
 
     input_dims = {'boston_housing': 13, 'concrete': 8, 'energy': 8, 'kin8nm': 8, 'power': 4, 'protein': 9, 'wine': 11, 'yacht': 6, 'naval': 16}
-    datasets = ['naval', 'boston_housing', 'concrete', 'energy', 'kin8nm', 'power', 'protein', 'wine', 'yacht']
+    #datasets = ['naval', 'boston_housing', 'concrete', 'energy', 'kin8nm', 'power', 'protein', 'wine', 'yacht']
+    datasets = ['protein', 'wine', 'yacht']
 
     # hyperparameters
-    sample = False
+    sample = True
     direct_invert = True
     standard_normal_prior = True
     activation_function = torch.tanh
@@ -811,7 +812,7 @@ if __name__ == "__main__":
             else:
                 no_splits = 20
 
-        directory = './/experiments//gap//' + dataset + '//Mar27_2HL'
+        directory = './/experiments//gap//' + dataset + '//Apr4_2HL_sampled'
         os.mkdir(directory)
         input_dim = input_dims[dataset]
         omega_range = [1.0, 2.0]

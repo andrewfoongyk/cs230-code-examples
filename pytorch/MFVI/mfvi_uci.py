@@ -190,7 +190,7 @@ def sample_mfvi(model, inputs, labels, train_mean, train_sd, no_samples):
     abs_errors = torch.abs(labels - mean_prediction)
     variances = noise_var + torch.mean(all_outputs**2, 1) - mean_prediction**2
 
-    return sum_LLs, squared_error, abs_errors, variances 
+    return sum_LLs.detach(), squared_error.detach(), abs_errors.detach(), variances.detach() # detach everything
 
 def evaluate(model, x_test, y_test, train_mean, train_sd, x_train_normalised=None, validation=None, optimizer=None, directory=None, name=None):
     
@@ -459,12 +459,12 @@ if __name__ == "__main__":
 
     input_dims = {'boston_housing': 13, 'concrete': 8, 'energy': 8, 'kin8nm': 8, 'power': 4, 'protein': 9, 'wine': 11, 'yacht': 6, 'naval': 16}
     #datasets = ['boston_housing', 'concrete', 'energy', 'kin8nm', 'naval','power', 'protein', 'wine', 'yacht']
-    datasets = ['kin8nm', 'naval','power', 'protein']
+    datasets = ['protein']
 
     # hyperparameters
     standard_normal_prior = True
     activation_function = F.relu
-    hidden_sizes = [50]
+    hidden_sizes = [50, 50]
     learned_noise_var = True
     noise_param_init = -1
     gap = True
@@ -478,7 +478,7 @@ if __name__ == "__main__":
             else:
                 no_splits = 20
 
-        directory = './/experiments//gap//' + dataset + '//Apr2_1HL'
+        directory = './/experiments//gap//' + dataset + '//Apr3_2HL'
         os.mkdir(directory)
         input_dim = input_dims[dataset]
         omega_range = [1.0]

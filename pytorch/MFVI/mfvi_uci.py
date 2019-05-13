@@ -271,15 +271,14 @@ def train(model, train_x, train_y, eval_x, eval_y, train_mean, train_sd, validat
             # calculate the number of batches in this epoch
             no_batches = int(np.floor(trainset_size/minibatch_size))
             #print('Beginning epoch {}'.format(epoch))
+            # shuffle the dataset
+            idx = torch.randperm(trainset_size)
+            x_train_normalised = train_x[idx,:] 
+            y_train_normalised = train_y[idx] 
             # loop over trainset
             for i in range(no_batches):
                 # clear previous gradients
                 optimizer.zero_grad()
-
-                # shuffle the dataset
-                idx = torch.randperm(trainset_size)
-                x_train_normalised = train_x[idx,:] 
-                y_train_normalised = train_y[idx] 
                 
                 # fetch the batch, but only if there are enough datapoints left
                 if (i+1)*minibatch_size <= trainset_size - 1:
@@ -458,16 +457,16 @@ if __name__ == "__main__":
     torch.manual_seed(seed) 
 
     input_dims = {'boston_housing': 13, 'concrete': 8, 'energy': 8, 'kin8nm': 8, 'power': 4, 'protein': 9, 'wine': 11, 'yacht': 6, 'naval': 16}
-    #datasets = ['boston_housing', 'concrete', 'energy', 'kin8nm', 'naval','power', 'protein', 'wine', 'yacht']
-    datasets = ['kin8nm', 'naval','power', 'protein']
+    datasets = ['boston_housing', 'concrete', 'energy', 'kin8nm', 'naval','power', 'protein', 'wine', 'yacht']
+    # datasets = ['kin8nm', 'naval','power', 'protein']
 
     # hyperparameters
     standard_normal_prior = True
-    activation_function = torch.tanh
-    hidden_sizes = [50]
+    activation_function = F.relu
+    hidden_sizes = [50, 50]
     learned_noise_var = True
     noise_param_init = -1
-    gap = True
+    gap = False
 
     for dataset in datasets: 
         if gap == True:
@@ -478,7 +477,7 @@ if __name__ == "__main__":
             else:
                 no_splits = 20
 
-        directory = './/experiments//gap//' + dataset + '//1HL_tanh'
+        directory = './/experiments//yarin_no_replacement//' + dataset + '//2HL'
         os.mkdir(directory)
         input_dim = input_dims[dataset]
         omega_range = [1.0]

@@ -579,14 +579,13 @@ def train(model, train_x, train_y, eval_x, eval_y, train_mean, train_sd, validat
             no_batches = int(np.floor(trainset_size/minibatch_size))
             #print('Beginning epoch {}'.format(epoch))
             # loop over trainset
+            # shuffle the dataset
+            idx = torch.randperm(trainset_size)
+            x_train_normalised = train_x[idx,:] 
+            y_train_normalised = train_y[idx] 
             for i in range(no_batches):
                 # clear previous gradients
                 optimizer.zero_grad()
-
-                # shuffle the dataset
-                idx = torch.randperm(trainset_size)
-                x_train_normalised = train_x[idx,:] 
-                y_train_normalised = train_y[idx] 
                 
                 # fetch the batch, but only if there are enough datapoints left
                 if (i+1)*minibatch_size <= trainset_size - 1:

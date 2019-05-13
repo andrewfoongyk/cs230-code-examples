@@ -203,7 +203,7 @@ class MLP(nn.Module):
         # JITTER M
         M = M + torch.eye(no_train).cuda()*M[0,0]*1e-6 ########
 
-        U = torch.potrf(M, upper=True) # upper triangular decomposition
+        U = torch.cholesky(M, upper=True) # upper triangular decomposition
 
         # solve the triangular system
         V = torch.trtrs(ZPinvG, U, transpose=True)[0] # (no_train x no_test), some of the stuff might need transposing
@@ -310,6 +310,7 @@ def plot_reg(model, data_load, directory, iter_number=0, linearise=False, Ainv=0
     plt.savefig(filename)
     plt.close()
 
+
 def plot(test_inputs, mean, sd, directory, title=''):
     mean = mean.squeeze() # maybe change for higher dim input?
     test_inputs = test_inputs.squeeze()
@@ -333,6 +334,19 @@ def plot(test_inputs, mean, sd, directory, title=''):
     filename = directory + '//linearised_laplace' + title + '.pdf' 
     plt.savefig(filename)
     plt.close()
+
+    # pickle everything as numpy arrays for posterity
+    if title == '':
+        inputs = test_inputs
+        #mean = test_y
+        #sd = predictive_sd
+
+        pickle_location = os.path.join(directory, 'plot_laplace_tanh')
+        outfile = open(pickle_location, 'wb')
+        pickle.dump(inputs, outfile)
+        pickle.dump(mean, outfile)
+        pickle.dump(sd, outfile)
+        outfile.close()
 
 def unpack_sample(model, parameter_vector):
     """convert a numpy vector of parameters to a list of parameter tensors"""
@@ -448,18 +462,18 @@ if __name__ == "__main__":
     torch.manual_seed(seed) #  230
 
     # hyperparameters
-    activation_function = torch.tanh
+    activation_function = F.relu
     noise_variance = 0.01
     hidden_sizes = [50]
     omega = 4
     learning_rate = 1e-3
     no_iters = 20001
     plot_iters = 1000
-    learned_noise_var = True
+    learned_noise_var = False
     #subsample = True
     #num_subsamples = 5
 
-    directory = './/experiments//subsampling'
+    directory = './/experiments//ICML_relu'
     #data_location = './/experiments//2_points_init//prior_dataset.pkl'
     data_location = '..//vision//data//1D_COSINE//1d_cosine_separated.pkl'
 

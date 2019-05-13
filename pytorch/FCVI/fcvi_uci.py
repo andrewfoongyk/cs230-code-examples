@@ -71,7 +71,7 @@ class FCVI_Net(nn.Module):
         L_diag = torch.diag(L_init)
         L_diag_mat = torch.diag(L_diag)
         self.L = L_init - L_diag_mat + torch.diag(torch.exp(L_diag)) # cholesky decomposition
-        self.Sigma = torch.matmul(self.L, torch.t(self.L)) # covariance matrix
+        self.Sigma = torch.matmul(self.L, torch.t(self.L)) # covariance matrix #### this can be sped up because I only need the diagonals?
         # sample all parameters
         samples = self.get_samples(self.L, no_samples, batch_size)
         # unpack weights and biases
@@ -495,16 +495,16 @@ if __name__ == "__main__":
 
     input_dims = {'boston_housing': 13, 'concrete': 8, 'energy': 8, 'kin8nm': 8, 'power': 4, 'protein': 9, 'wine': 11, 'yacht': 6, 'naval': 16}
     #datasets = ['boston_housing', 'concrete', 'energy', 'kin8nm', 'naval','power', 'protein', 'wine', 'yacht']
-    #datasets = ['boston_housing', 'concrete', 'energy', 'wine', 'yacht']
-    datasets = ['kin8nm', 'naval', 'power', 'protein']
+    datasets = ['protein']
+    #datasets = ['protein']
 
     # hyperparameters
     standard_normal_prior = True
-    activation_function = F.relu
+    activation_function = torch.tanh
     hidden_sizes = [50]
     learned_noise_var = True
     noise_param_init = -1
-    gap = True
+    gap = False
 
     for dataset in datasets: 
         if gap == True:
@@ -515,7 +515,7 @@ if __name__ == "__main__":
             else:
                 no_splits = 20
 
-        directory = './/experiments//gap//' + dataset + '//1HL'
+        directory = './/experiments//yarin//' + dataset + '//1HL_tanh'
         os.mkdir(directory)
         input_dim = input_dims[dataset]
         omega_range = [1.0]

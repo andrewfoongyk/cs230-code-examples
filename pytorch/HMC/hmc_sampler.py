@@ -14,12 +14,13 @@ import cProfile
 
 def plot_regression(model, samples, directory, no_plot_samples):
     plt.figure()
+    plt.rcParams.update({'font.size': 14})
     plt.xlabel('$x$')
     plt.ylabel('$y$')
     axes = plt.gca()
     axes.set_xlim([-3, 3])
     axes.set_ylim([-3, 3])
-    plt.plot(data_load[:,0], data_load[:,1], '+k')
+    plt.plot(data_load[:,0], data_load[:,1], '+k', markersize=16)
     N = 1000
     x_lower = -6
     x_upper = 8
@@ -43,7 +44,7 @@ def plot_regression(model, samples, directory, no_plot_samples):
         # convert back to np array
         test_outputs = test_outputs.data.cpu().numpy()
         test_outputs = test_outputs.reshape(N)
-        plt.plot(x_values, test_outputs, linewidth=0.3)
+        plt.plot(x_values, test_outputs, linewidth=1)
         # save data for ensemble mean and s.d. calculation
         all_test_outputs[i,:] = test_outputs
 
@@ -57,6 +58,18 @@ def plot_regression(model, samples, directory, no_plot_samples):
     filepath = os.path.join(directory, 'HMC_regression.pdf')
     plt.savefig(filepath)
     plt.close()
+
+    # pickle everything as numpy arrays for posterity
+    inputs_hmc = x_values
+    mean_hmc = mean
+    sd_hmc = np.sqrt(variance)
+
+    pickle_location = os.path.join(directory, 'plot_hmc_relu')
+    outfile = open(pickle_location, 'wb')
+    pickle.dump(inputs_hmc, outfile)
+    pickle.dump(mean_hmc, outfile)
+    pickle.dump(sd_hmc, outfile)
+    outfile.close()
 
 def plot_covariance(hidden_sizes, samples, directory):
     # plot the empirical covariance matrix (use unbiased estimator?) and the correlation matrix
@@ -126,6 +139,12 @@ class MLP(nn.Module):
         # self.linears[1].weight.data = torch.Tensor([[-1.414]])
         # self.linears[1].bias.data = torch.Tensor([2])
         # ################
+
+        ################ custom initialisation for 2 points in-between uncertainty
+        # self.linears[0].weight.data = torch.Tensor([[1], [1]])
+        # self.linears[0].bias.data = torch.Tensor([0.5, -0.5])
+        # self.linears[1].weight.data = torch.Tensor([[1, 1]])
+        # self.linears[1].bias.data = torch.Tensor([0.2])
 
         print(self.linears)
         
@@ -278,18 +297,18 @@ if __name__ == "__main__":
     torch.manual_seed(230) #  230
 
     # hyperparameters
-    noise_variance = 0.01
+    noise_variance = 0.01 # 0.01
     hidden_sizes = [50]
     omega = 4
 
     burn_in = 10000
-    no_samples = 40000
-    no_saved_samples = 40000
-    no_plot_samples = 32
-    step_size = [0.001, 0.003]
+    no_samples = 20000
+    no_saved_samples = 1000
+    no_plot_samples = 100 #32
+    step_size = [0.001, 0.0015]
     num_steps = [5, 10]
 
-    directory = './/experiments//1d_cosine_separated_tanh'
+    directory = './/experiments//ICML_tanh2'
     #data_location = './/experiments//2_points_init//prior_dataset.pkl'
     data_location = '..//vision//data//1D_COSINE//1d_cosine_separated.pkl'
 

@@ -282,557 +282,557 @@ class FCVI_Net(nn.Module):
         no_params = no_params + self.hidden_sizes[-1] + self.hidden_sizes[-1]*self.output_size + self.output_size # final weight matrix and last 2 biases
         return no_params
 
-class Fixed_Mean_VI_Linear_Layer(nn.Module):
-    def __init__(self, n_input, n_output, omega, fixed_W, fixed_b, prior_init=False):
-        super(Fixed_Mean_VI_Linear_Layer, self).__init__()
-        self.n_input = n_input
-        self.n_output = n_output
-        # scale the prior with no. of hidden units, corresponds to radford neal's omega
-        prior_logvar = 2*np.log(omega) - np.log(n_input)
-        self.prior_logvar = prior_logvar
+# class Fixed_Mean_VI_Linear_Layer(nn.Module):
+#     def __init__(self, n_input, n_output, omega, fixed_W, fixed_b, prior_init=False):
+#         super(Fixed_Mean_VI_Linear_Layer, self).__init__()
+#         self.n_input = n_input
+#         self.n_output = n_output
+#         # scale the prior with no. of hidden units, corresponds to radford neal's omega
+#         prior_logvar = 2*np.log(omega) - np.log(n_input)
+#         self.prior_logvar = prior_logvar
 
-        """initialise variance parameters following 'Neural network ensembles and variational inference revisited', Appendix A; 
-        keep the means fixed - use weights of pretrained network"""
-        # weight parameters
-        self.W_mean = fixed_W # initialisation of weight means
-        self.W_mean.requires_grad = False # keep these fixed
-        self.W_logvar = nn.Parameter(torch.Tensor(n_input, n_output).normal_(-11.5 + prior_logvar, 1e-10)) # initialisation of weight logvariances 
-        # bias parameters
-        self.b_mean = fixed_b # initialisation of bias means
-        self.b_mean.requires_grad = False # keep these fixed
-        self.b_logvar = nn.Parameter(torch.Tensor(n_output).normal_(-11.5, 1e-10)) # initialisation of bias logvariances 
+#         """initialise variance parameters following 'Neural network ensembles and variational inference revisited', Appendix A; 
+#         keep the means fixed - use weights of pretrained network"""
+#         # weight parameters
+#         self.W_mean = fixed_W # initialisation of weight means
+#         self.W_mean.requires_grad = False # keep these fixed
+#         self.W_logvar = nn.Parameter(torch.Tensor(n_input, n_output).normal_(-11.5 + prior_logvar, 1e-10)) # initialisation of weight logvariances 
+#         # bias parameters
+#         self.b_mean = fixed_b # initialisation of bias means
+#         self.b_mean.requires_grad = False # keep these fixed
+#         self.b_logvar = nn.Parameter(torch.Tensor(n_output).normal_(-11.5, 1e-10)) # initialisation of bias logvariances 
         
-        # prior parameters 
-        self.W_prior_mean = Variable(torch.zeros(n_input, n_output).cuda())
-        self.W_prior_logvar = Variable((prior_logvar*torch.ones(n_input, n_output)).cuda())
-        self.b_prior_mean = Variable(torch.zeros(n_output).cuda())
-        self.b_prior_logvar = Variable((prior_logvar*torch.ones(n_output)).cuda())
+#         # prior parameters 
+#         self.W_prior_mean = Variable(torch.zeros(n_input, n_output).cuda())
+#         self.W_prior_logvar = Variable((prior_logvar*torch.ones(n_input, n_output)).cuda())
+#         self.b_prior_mean = Variable(torch.zeros(n_output).cuda())
+#         self.b_prior_logvar = Variable((prior_logvar*torch.ones(n_output)).cuda())
 
-        if prior_init == True: # initialise parameters to their prior values
-            self.W_mean = nn.Parameter(torch.zeros(n_input, n_output))
-            self.W_logvar = nn.Parameter(prior_logvar*torch.ones(n_input, n_output))
-            self.b_mean = nn.Parameter(torch.zeros(n_output))
-            self.b_logvar = nn.Parameter(prior_logvar*torch.ones(n_output))
+#         if prior_init == True: # initialise parameters to their prior values
+#             self.W_mean = nn.Parameter(torch.zeros(n_input, n_output))
+#             self.W_logvar = nn.Parameter(prior_logvar*torch.ones(n_input, n_output))
+#             self.b_mean = nn.Parameter(torch.zeros(n_output))
+#             self.b_logvar = nn.Parameter(prior_logvar*torch.ones(n_output))
 
-        self.num_weights = n_input*n_output + n_output # number of weights and biases
+#         self.num_weights = n_input*n_output + n_output # number of weights and biases
  
-    def forward(self, x, no_samples, shared_weights): # number of samples per forward pass
-        """
-        input is either (batch_size x no_input), if this is the first layer of the network, or (no_samples x batch_size x no_input), 
-        and output is (no_samples x batch_size x no_output)
-        """
-        # local reparameterisation trick
+#     def forward(self, x, no_samples, shared_weights): # number of samples per forward pass
+#         """
+#         input is either (batch_size x no_input), if this is the first layer of the network, or (no_samples x batch_size x no_input), 
+#         and output is (no_samples x batch_size x no_output)
+#         """
+#         # local reparameterisation trick
 
-        if shared_weights == True: # can't use local reparam trick if we want to sample functions from the network. assume we will only do one test sample at a time
-            batch_size = x.size()[0]
-            # sample just one weight matrix and just one bias vector
-            W_var = torch.exp(self.W_logvar)
-            b_var = torch.exp(self.b_logvar)
-            z_W = Variable(torch.Tensor(self.n_input, self.n_output).normal_(0, 1).cuda())
-            z_b = Variable(torch.Tensor(self.n_output).normal_(0, 1).cuda())
-            W = self.W_mean + torch.mul(torch.sqrt(W_var), z_W)
-            b = self.b_mean + torch.mul(torch.sqrt(b_var), z_b)
-            b = b.expand(batch_size, -1)
-            samples_activations = torch.mm(x, W) + b
+#         if shared_weights == True: # can't use local reparam trick if we want to sample functions from the network. assume we will only do one test sample at a time
+#             batch_size = x.size()[0]
+#             # sample just one weight matrix and just one bias vector
+#             W_var = torch.exp(self.W_logvar)
+#             b_var = torch.exp(self.b_logvar)
+#             z_W = Variable(torch.Tensor(self.n_input, self.n_output).normal_(0, 1).cuda())
+#             z_b = Variable(torch.Tensor(self.n_output).normal_(0, 1).cuda())
+#             W = self.W_mean + torch.mul(torch.sqrt(W_var), z_W)
+#             b = self.b_mean + torch.mul(torch.sqrt(b_var), z_b)
+#             b = b.expand(batch_size, -1)
+#             samples_activations = torch.mm(x, W) + b
 
-        else:
-            # find out if this is the first layer of the network. if it is, perform an expansion to no_samples
-            if len(x.shape) == 2: 
-                batch_size = x.size()[0]
-                z = self.get_random(no_samples, batch_size)
-                gamma = torch.mm(x, self.W_mean) + self.b_mean.expand(batch_size, -1)
-                W_var = torch.exp(self.W_logvar) 
-                b_var = torch.exp(self.b_logvar)
-                delta = torch.mm(x**2, W_var) + b_var.expand(batch_size, -1)
-                sqrt_delta = torch.sqrt(delta) 
-                samples_gamma = gamma.expand(no_samples, -1, -1)
-                samples_sqrt_delta = sqrt_delta.expand(no_samples, -1, -1)
-                samples_activations = samples_gamma + torch.mul(samples_sqrt_delta, z)
+#         else:
+#             # find out if this is the first layer of the network. if it is, perform an expansion to no_samples
+#             if len(x.shape) == 2: 
+#                 batch_size = x.size()[0]
+#                 z = self.get_random(no_samples, batch_size)
+#                 gamma = torch.mm(x, self.W_mean) + self.b_mean.expand(batch_size, -1)
+#                 W_var = torch.exp(self.W_logvar) 
+#                 b_var = torch.exp(self.b_logvar)
+#                 delta = torch.mm(x**2, W_var) + b_var.expand(batch_size, -1)
+#                 sqrt_delta = torch.sqrt(delta) 
+#                 samples_gamma = gamma.expand(no_samples, -1, -1)
+#                 samples_sqrt_delta = sqrt_delta.expand(no_samples, -1, -1)
+#                 samples_activations = samples_gamma + torch.mul(samples_sqrt_delta, z)
 
-            elif len(x.shape) == 3:
-                batch_size = x.size()[1]
-                z = self.get_random(no_samples, batch_size)
-                # samples_gamma has different values for each sample, so has dimensions (no_samples x batch_size x no_outputs)
-                samples_gamma = torch.matmul(x, self.W_mean) + self.b_mean.expand(no_samples, batch_size, -1)
-                W_var = torch.exp(self.W_logvar)
-                b_var = torch.exp(self.b_logvar)
-                # delta has different values for each sample, so has dimensions (no_samples x batch_size x no_outputs)
-                delta = torch.matmul(x**2, W_var) + b_var.expand(no_samples, batch_size, -1)
-                samples_sqrt_delta = torch.sqrt(delta)
-                samples_activations = samples_gamma + torch.mul(samples_sqrt_delta, z)
+#             elif len(x.shape) == 3:
+#                 batch_size = x.size()[1]
+#                 z = self.get_random(no_samples, batch_size)
+#                 # samples_gamma has different values for each sample, so has dimensions (no_samples x batch_size x no_outputs)
+#                 samples_gamma = torch.matmul(x, self.W_mean) + self.b_mean.expand(no_samples, batch_size, -1)
+#                 W_var = torch.exp(self.W_logvar)
+#                 b_var = torch.exp(self.b_logvar)
+#                 # delta has different values for each sample, so has dimensions (no_samples x batch_size x no_outputs)
+#                 delta = torch.matmul(x**2, W_var) + b_var.expand(no_samples, batch_size, -1)
+#                 samples_sqrt_delta = torch.sqrt(delta)
+#                 samples_activations = samples_gamma + torch.mul(samples_sqrt_delta, z)
        
-        return samples_activations
+#         return samples_activations
 
-    def get_shared_random(self, no_samples, batch_size):
-        z = Variable(torch.Tensor(no_samples, self.n_output).normal_(0, 1).cuda())
-        z = z.expand(batch_size, -1, -1)
-        return torch.transpose(z, 0, 1)
+#     def get_shared_random(self, no_samples, batch_size):
+#         z = Variable(torch.Tensor(no_samples, self.n_output).normal_(0, 1).cuda())
+#         z = z.expand(batch_size, -1, -1)
+#         return torch.transpose(z, 0, 1)
 
-    def get_random(self, no_samples, batch_size):
-        return Variable(torch.Tensor(no_samples, batch_size, self.n_output).normal_(0, 1).cuda()) # standard normal noise matrix
+#     def get_random(self, no_samples, batch_size):
+#         return Variable(torch.Tensor(no_samples, batch_size, self.n_output).normal_(0, 1).cuda()) # standard normal noise matrix
 
-    def KL(self): # get KL between q and prior for this layer
-        # W_KL = 0.5*(- self.W_logvar + torch.exp(self.W_logvar) + (self.W_mean)**2)
-        # b_KL = 0.5*(- self.b_logvar + torch.exp(self.b_logvar) + (self.b_mean)**2)
-        W_KL = 0.5*(self.W_prior_logvar - self.W_logvar + (torch.exp(self.W_logvar) + (self.W_mean - self.W_prior_mean)**2)/torch.exp(self.W_prior_logvar))
-        b_KL = 0.5*(self.b_prior_logvar - self.b_logvar + (torch.exp(self.b_logvar) + (self.b_mean - self.b_prior_mean)**2)/torch.exp(self.b_prior_logvar))
-        return W_KL.sum() + b_KL.sum() - 0.5*self.num_weights
+#     def KL(self): # get KL between q and prior for this layer
+#         # W_KL = 0.5*(- self.W_logvar + torch.exp(self.W_logvar) + (self.W_mean)**2)
+#         # b_KL = 0.5*(- self.b_logvar + torch.exp(self.b_logvar) + (self.b_mean)**2)
+#         W_KL = 0.5*(self.W_prior_logvar - self.W_logvar + (torch.exp(self.W_logvar) + (self.W_mean - self.W_prior_mean)**2)/torch.exp(self.W_prior_logvar))
+#         b_KL = 0.5*(self.b_prior_logvar - self.b_logvar + (torch.exp(self.b_logvar) + (self.b_mean - self.b_prior_mean)**2)/torch.exp(self.b_prior_logvar))
+#         return W_KL.sum() + b_KL.sum() - 0.5*self.num_weights
 
-class Fixed_Mean_VI_Net(nn.Module):
-    def __init__(self, params, map_model, prior_init=False):
-        super(Fixed_Mean_VI_Net, self).__init__()
-        self.train_samples = params.train_samples
-        self.test_samples = params.test_samples
-        self.dataset = params.dataset
-        # self.prior_logvar = params.prior_logvar
-        self.omega = params.omega
-        self.activation_name = params.activation
-        if params.activation == 'relu':
-            self.activation = F.relu
-        elif params.activation == 'tanh':
-            self.activation = torch.tanh
-        elif params.activation == 'bump':
-            self.activation = bump
-        elif params.activation == 'prelu':
-            self.prelu_weight = nn.Parameter(torch.Tensor([0.25]))
-            self.activation = F.prelu
-        elif params.activation == 'sine':
-            self.activation = torch.sin
+# class Fixed_Mean_VI_Net(nn.Module):
+#     def __init__(self, params, map_model, prior_init=False):
+#         super(Fixed_Mean_VI_Net, self).__init__()
+#         self.train_samples = params.train_samples
+#         self.test_samples = params.test_samples
+#         self.dataset = params.dataset
+#         # self.prior_logvar = params.prior_logvar
+#         self.omega = params.omega
+#         self.activation_name = params.activation
+#         if params.activation == 'relu':
+#             self.activation = F.relu
+#         elif params.activation == 'tanh':
+#             self.activation = torch.tanh
+#         elif params.activation == 'bump':
+#             self.activation = bump
+#         elif params.activation == 'prelu':
+#             self.prelu_weight = nn.Parameter(torch.Tensor([0.25]))
+#             self.activation = F.prelu
+#         elif params.activation == 'sine':
+#             self.activation = torch.sin
         
-         # adjust input and output size depending on dataset used and read output noise
-        if params.dataset == 'mnist':
-            self.input_channels = 1
-            self.input_size = 28*28
-            self.output_size = 10
-        elif params.dataset == '1d_cosine' or params.dataset == 'prior_dataset':
-            self.input_channels = 1
-            self.input_size = 1
-            self.output_size = 1
-            self.noise_variance = params.noise_variance
-        elif params.dataset == 'signs':
-            self.input_channels = 3
-            self.input_size = 64*64
-            self.output_size = 6
+#          # adjust input and output size depending on dataset used and read output noise
+#         if params.dataset == 'mnist':
+#             self.input_channels = 1
+#             self.input_size = 28*28
+#             self.output_size = 10
+#         elif params.dataset == '1d_cosine' or params.dataset == 'prior_dataset':
+#             self.input_channels = 1
+#             self.input_size = 1
+#             self.output_size = 1
+#             self.noise_variance = params.noise_variance
+#         elif params.dataset == 'signs':
+#             self.input_channels = 3
+#             self.input_size = 64*64
+#             self.output_size = 6
 
-        # extract weights from MAP model
-        map_weights = []
-        map_biases = []
-        for i, l in enumerate(map_model.linears):
-            map_weights.append(l.weight)
-            map_biases.append(l.bias)
+#         # extract weights from MAP model
+#         map_weights = []
+#         map_biases = []
+#         for i, l in enumerate(map_model.linears):
+#             map_weights.append(l.weight)
+#             map_biases.append(l.bias)
 
-        # create the layers in the network based on params
-        self.hidden_sizes = params.hidden_sizes
-        self.linears = nn.ModuleList([Fixed_Mean_VI_Linear_Layer(self.input_size*self.input_channels, self.hidden_sizes[0], self.omega, map_weights[0], map_biases[0], prior_init)])
-        self.linears.extend([Fixed_Mean_VI_Linear_Layer(self.hidden_sizes[i], self.hidden_sizes[i+1], self.omega, map_weights[i+1], map_biases[i+1], prior_init) for i in range(0, lpip3 fren(self.hidden_sizes)-1)])
-        self.linears.append(Fixed_Mean_VI_Linear_Layer(self.hidden_sizes[-1], self.output_size, self.omega, map_weights[-1], map_biases[-1], prior_init))
+#         # create the layers in the network based on params
+#         self.hidden_sizes = params.hidden_sizes
+#         self.linears = nn.ModuleList([Fixed_Mean_VI_Linear_Layer(self.input_size*self.input_channels, self.hidden_sizes[0], self.omega, map_weights[0], map_biases[0], prior_init)])
+#         self.linears.extend([Fixed_Mean_VI_Linear_Layer(self.hidden_sizes[i], self.hidden_sizes[i+1], self.omega, map_weights[i+1], map_biases[i+1], prior_init) for i in range(0, lpip3 fren(self.hidden_sizes)-1)])
+#         self.linears.append(Fixed_Mean_VI_Linear_Layer(self.hidden_sizes[-1], self.output_size, self.omega, map_weights[-1], map_biases[-1], prior_init))
 
-    def get_KL_term(self):
-        # calculate KL divergence between q and the prior for the entire network
-        KL_term = 0
-        for _, l in enumerate(self.linears):
-            KL_term = KL_term + l.KL()
-        return KL_term
+#     def get_KL_term(self):
+#         # calculate KL divergence between q and the prior for the entire network
+#         KL_term = 0
+#         for _, l in enumerate(self.linears):
+#             KL_term = KL_term + l.KL()
+#         return KL_term
 
-    def forward(self, s, no_samples, shared_weights=False):
-        s = s.view(-1, self.input_size*self.input_channels)
-        for i, l in enumerate(self.linears):
-            s = l(s, no_samples = no_samples, shared_weights = shared_weights)
-            if i < len(self.linears) - 1:
-                if self.activation_name == 'prelu':
-                    s = self.activation(s, self.prelu_weight)
-                else:
-                    s = self.activation(s) 
-        if self.dataset == '1d_cosine' or self.dataset == 'prior_dataset': # make this more flexible
-            # s has dimension (no_samples x batch_size x no_output=1)
-            s = s.view(no_samples, -1) # (no_samples x batch_size)
-            return s
-        else:
-            s = F.log_softmax(s, dim=2) # dimension (no_samples x batch_size x no_output)       
-            return torch.mean(s, 0) # taking the expectation, dimension (batch_size x no_output)
+#     def forward(self, s, no_samples, shared_weights=False):
+#         s = s.view(-1, self.input_size*self.input_channels)
+#         for i, l in enumerate(self.linears):
+#             s = l(s, no_samples = no_samples, shared_weights = shared_weights)
+#             if i < len(self.linears) - 1:
+#                 if self.activation_name == 'prelu':
+#                     s = self.activation(s, self.prelu_weight)
+#                 else:
+#                     s = self.activation(s) 
+#         if self.dataset == '1d_cosine' or self.dataset == 'prior_dataset': # make this more flexible
+#             # s has dimension (no_samples x batch_size x no_output=1)
+#             s = s.view(no_samples, -1) # (no_samples x batch_size)
+#             return s
+#         else:
+#             s = F.log_softmax(s, dim=2) # dimension (no_samples x batch_size x no_output)       
+#             return torch.mean(s, 0) # taking the expectation, dimension (batch_size x no_output)
 
-    def return_weights(self):
-        """return the weights and biases of the network"""
-        # return a list of lists - the first list goes through layers, and each item is a list that has means in 0th place and S.D.'s in 1st place
-        weights = []
-        biases = []
-        priors = []
-        for _, l in enumerate(self.linears):
-            layer_weights = []
-            layer_biases = []
-            layer_weights.append(l.W_mean.cpu().detach().numpy())
-            layer_biases.append(l.b_mean.cpu().detach().numpy())
-            layer_weights.append(np.sqrt(np.exp(l.W_logvar.cpu().detach().numpy())))
-            layer_biases.append(np.sqrt(np.exp(l.b_logvar.cpu().detach().numpy())))
-            weights.append(layer_weights)
-            biases.append(layer_biases)
-            n_input = l.W_mean.size()[0]
-            priors.append(self.omega/np.sqrt(n_input))
-        return weights, biases, priors
+#     def return_weights(self):
+#         """return the weights and biases of the network"""
+#         # return a list of lists - the first list goes through layers, and each item is a list that has means in 0th place and S.D.'s in 1st place
+#         weights = []
+#         biases = []
+#         priors = []
+#         for _, l in enumerate(self.linears):
+#             layer_weights = []
+#             layer_biases = []
+#             layer_weights.append(l.W_mean.cpu().detach().numpy())
+#             layer_biases.append(l.b_mean.cpu().detach().numpy())
+#             layer_weights.append(np.sqrt(np.exp(l.W_logvar.cpu().detach().numpy())))
+#             layer_biases.append(np.sqrt(np.exp(l.b_logvar.cpu().detach().numpy())))
+#             weights.append(layer_weights)
+#             biases.append(layer_biases)
+#             n_input = l.W_mean.size()[0]
+#             priors.append(self.omega/np.sqrt(n_input))
+#         return weights, biases, priors
 
-class Weight_Noise_Layer(nn.Module):
-    def __init__(self, n_input, n_output, prior_logvar, prior_init=False):
-        super(Weight_Noise_Layer, self).__init__()
-        self.n_input = n_input
-        self.n_output = n_output
-        # scale the prior with no. of hidden units #####################
-        omega = 2 # prior scale factor - corresponds to radford neal's omega
-        prior_logvar = 2*np.log(omega) -np.log(n_input)
-        self.prior_logvar = prior_logvar
+# class Weight_Noise_Layer(nn.Module):
+#     def __init__(self, n_input, n_output, prior_logvar, prior_init=False):
+#         super(Weight_Noise_Layer, self).__init__()
+#         self.n_input = n_input
+#         self.n_output = n_output
+#         # scale the prior with no. of hidden units #####################
+#         omega = 2 # prior scale factor - corresponds to radford neal's omega
+#         prior_logvar = 2*np.log(omega) -np.log(n_input)
+#         self.prior_logvar = prior_logvar
 
-        """initialise parameters and priors following 'Neural network ensembles and variational inference revisited', Appendix A"""
-        # weight parameters
-        self.W_mean = nn.Parameter(torch.Tensor(n_input, n_output).normal_(0, 1/np.sqrt(4*n_output))) # initialisation of weight means
-        self.W_logvar = nn.Parameter(torch.Tensor(1).normal_(-11.5, 1e-10)) # initialisation of weight logvariance - tied 
-        # bias parameters
-        self.b_mean = nn.Parameter(torch.Tensor(n_output).normal_(0, 1e-10)) # initialisation of bias means
-        self.b_logvar = nn.Parameter(torch.Tensor(1).normal_(-11.5, 1e-10)) # initialisation of bias logvariance - tied 
+#         """initialise parameters and priors following 'Neural network ensembles and variational inference revisited', Appendix A"""
+#         # weight parameters
+#         self.W_mean = nn.Parameter(torch.Tensor(n_input, n_output).normal_(0, 1/np.sqrt(4*n_output))) # initialisation of weight means
+#         self.W_logvar = nn.Parameter(torch.Tensor(1).normal_(-11.5, 1e-10)) # initialisation of weight logvariance - tied 
+#         # bias parameters
+#         self.b_mean = nn.Parameter(torch.Tensor(n_output).normal_(0, 1e-10)) # initialisation of bias means
+#         self.b_logvar = nn.Parameter(torch.Tensor(1).normal_(-11.5, 1e-10)) # initialisation of bias logvariance - tied 
         
-        # prior parameters 
-        self.W_prior_mean = Variable(torch.zeros(n_input, n_output).cuda())
-        self.W_prior_logvar = Variable((prior_logvar*torch.ones(n_input, n_output)).cuda())
-        self.b_prior_mean = Variable(torch.zeros(n_output).cuda())
-        self.b_prior_logvar = Variable((prior_logvar*torch.ones(n_output)).cuda())
+#         # prior parameters 
+#         self.W_prior_mean = Variable(torch.zeros(n_input, n_output).cuda())
+#         self.W_prior_logvar = Variable((prior_logvar*torch.ones(n_input, n_output)).cuda())
+#         self.b_prior_mean = Variable(torch.zeros(n_output).cuda())
+#         self.b_prior_logvar = Variable((prior_logvar*torch.ones(n_output)).cuda())
 
-        if prior_init == True: # initialise parameters to their prior values
-            self.W_mean = nn.Parameter(torch.zeros(n_input, n_output))
-            self.W_logvar = nn.Parameter(prior_logvar*torch.ones(1))
-            self.b_mean = nn.Parameter(torch.zeros(n_output))
-            self.b_logvar = nn.Parameter(prior_logvar*torch.ones(1))
+#         if prior_init == True: # initialise parameters to their prior values
+#             self.W_mean = nn.Parameter(torch.zeros(n_input, n_output))
+#             self.W_logvar = nn.Parameter(prior_logvar*torch.ones(1))
+#             self.b_mean = nn.Parameter(torch.zeros(n_output))
+#             self.b_logvar = nn.Parameter(prior_logvar*torch.ones(1))
 
-        self.num_weights = n_input*n_output + n_output # number of weights and biases
+#         self.num_weights = n_input*n_output + n_output # number of weights and biases
  
-    def forward(self, x, no_samples, shared_weights): # number of samples per forward pass
-        """
-        input is either (batch_size x no_input), if this is the first layer of the network, or (no_samples x batch_size x no_input), 
-        and output is (no_samples x batch_size x no_output)
-        """
-        # local reparameterisation trick
+#     def forward(self, x, no_samples, shared_weights): # number of samples per forward pass
+#         """
+#         input is either (batch_size x no_input), if this is the first layer of the network, or (no_samples x batch_size x no_input), 
+#         and output is (no_samples x batch_size x no_output)
+#         """
+#         # local reparameterisation trick
 
-        if shared_weights == True: # can't use local reparam trick if we want to sample functions from the network. assume we will only do one test sample at a time
-            batch_size = x.size()[0]
-            # sample just one weight matrix and just one bias vector
-            W_var = torch.exp(self.W_logvar).expand(self.n_input, self.n_output)
-            b_var = torch.exp(self.b_logvar).expand(self.n_output)
-            z_W = Variable(torch.Tensor(self.n_input, self.n_output).normal_(0, 1).cuda())
-            z_b = Variable(torch.Tensor(self.n_output).normal_(0, 1).cuda())
-            W = self.W_mean + torch.mul(torch.sqrt(W_var), z_W)
-            b = self.b_mean + torch.mul(torch.sqrt(b_var), z_b)
-            b = b.expand(batch_size, -1)
-            samples_activations = torch.mm(x, W) + b
+#         if shared_weights == True: # can't use local reparam trick if we want to sample functions from the network. assume we will only do one test sample at a time
+#             batch_size = x.size()[0]
+#             # sample just one weight matrix and just one bias vector
+#             W_var = torch.exp(self.W_logvar).expand(self.n_input, self.n_output)
+#             b_var = torch.exp(self.b_logvar).expand(self.n_output)
+#             z_W = Variable(torch.Tensor(self.n_input, self.n_output).normal_(0, 1).cuda())
+#             z_b = Variable(torch.Tensor(self.n_output).normal_(0, 1).cuda())
+#             W = self.W_mean + torch.mul(torch.sqrt(W_var), z_W)
+#             b = self.b_mean + torch.mul(torch.sqrt(b_var), z_b)
+#             b = b.expand(batch_size, -1)
+#             samples_activations = torch.mm(x, W) + b
 
-        else:
-            # find out if this is the first layer of the network. if it is, perform an expansion to no_samples
-            if len(x.shape) == 2: 
-                batch_size = x.size()[0]
-                z = self.get_random(no_samples, batch_size)
-                gamma = torch.mm(x, self.W_mean) + self.b_mean.expand(batch_size, -1)
-                W_var = torch.exp(self.W_logvar).expand(self.n_input, self.n_output)
-                b_var = torch.exp(self.b_logvar).expand(self.n_output)
-                delta = torch.mm(x**2, W_var) + b_var.expand(batch_size, -1)
-                sqrt_delta = torch.sqrt(delta) 
-                samples_gamma = gamma.expand(no_samples, -1, -1)
-                samples_sqrt_delta = sqrt_delta.expand(no_samples, -1, -1)
-                samples_activations = samples_gamma + torch.mul(samples_sqrt_delta, z)
+#         else:
+#             # find out if this is the first layer of the network. if it is, perform an expansion to no_samples
+#             if len(x.shape) == 2: 
+#                 batch_size = x.size()[0]
+#                 z = self.get_random(no_samples, batch_size)
+#                 gamma = torch.mm(x, self.W_mean) + self.b_mean.expand(batch_size, -1)
+#                 W_var = torch.exp(self.W_logvar).expand(self.n_input, self.n_output)
+#                 b_var = torch.exp(self.b_logvar).expand(self.n_output)
+#                 delta = torch.mm(x**2, W_var) + b_var.expand(batch_size, -1)
+#                 sqrt_delta = torch.sqrt(delta) 
+#                 samples_gamma = gamma.expand(no_samples, -1, -1)
+#                 samples_sqrt_delta = sqrt_delta.expand(no_samples, -1, -1)
+#                 samples_activations = samples_gamma + torch.mul(samples_sqrt_delta, z)
 
-            elif len(x.shape) == 3:
-                batch_size = x.size()[1]
-                z = self.get_random(no_samples, batch_size)
-                # samples_gamma has different values for each sample, so has dimensions (no_samples x batch_size x no_outputs)
-                samples_gamma = torch.matmul(x, self.W_mean) + self.b_mean.expand(no_samples, batch_size, -1)
-                W_var = torch.exp(self.W_logvar).expand(self.n_input, self.n_output)
-                b_var = torch.exp(self.b_logvar).expand(self.n_output)
-                # delta has different values for each sample, so has dimensions (no_samples x batch_size x no_outputs)
-                delta = torch.matmul(x**2, W_var) + b_var.expand(no_samples, batch_size, -1)
-                samples_sqrt_delta = torch.sqrt(delta)
-                samples_activations = samples_gamma + torch.mul(samples_sqrt_delta, z)
+#             elif len(x.shape) == 3:
+#                 batch_size = x.size()[1]
+#                 z = self.get_random(no_samples, batch_size)
+#                 # samples_gamma has different values for each sample, so has dimensions (no_samples x batch_size x no_outputs)
+#                 samples_gamma = torch.matmul(x, self.W_mean) + self.b_mean.expand(no_samples, batch_size, -1)
+#                 W_var = torch.exp(self.W_logvar).expand(self.n_input, self.n_output)
+#                 b_var = torch.exp(self.b_logvar).expand(self.n_output)
+#                 # delta has different values for each sample, so has dimensions (no_samples x batch_size x no_outputs)
+#                 delta = torch.matmul(x**2, W_var) + b_var.expand(no_samples, batch_size, -1)
+#                 samples_sqrt_delta = torch.sqrt(delta)
+#                 samples_activations = samples_gamma + torch.mul(samples_sqrt_delta, z)
        
-        return samples_activations
+#         return samples_activations
 
-    def get_shared_random(self, no_samples, batch_size):
-        z = Variable(torch.Tensor(no_samples, self.n_output).normal_(0, 1).cuda())
-        z = z.expand(batch_size, -1, -1)
-        return torch.transpose(z, 0, 1)
+#     def get_shared_random(self, no_samples, batch_size):
+#         z = Variable(torch.Tensor(no_samples, self.n_output).normal_(0, 1).cuda())
+#         z = z.expand(batch_size, -1, -1)
+#         return torch.transpose(z, 0, 1)
 
-    def get_random(self, no_samples, batch_size):
-        return Variable(torch.Tensor(no_samples, batch_size, self.n_output).normal_(0, 1).cuda()) # standard normal noise matrix
+#     def get_random(self, no_samples, batch_size):
+#         return Variable(torch.Tensor(no_samples, batch_size, self.n_output).normal_(0, 1).cuda()) # standard normal noise matrix
 
-    def KL(self): # get KL between q and prior for this layer
-        # W_KL = 0.5*(- self.W_logvar + torch.exp(self.W_logvar) + (self.W_mean)**2)
-        # b_KL = 0.5*(- self.b_logvar + torch.exp(self.b_logvar) + (self.b_mean)**2)
-        W_KL = 0.5*(self.W_prior_logvar - self.W_logvar + (torch.exp(self.W_logvar) + (self.W_mean - self.W_prior_mean)**2)/torch.exp(self.W_prior_logvar))
-        b_KL = 0.5*(self.b_prior_logvar - self.b_logvar + (torch.exp(self.b_logvar) + (self.b_mean - self.b_prior_mean)**2)/torch.exp(self.b_prior_logvar))
-        return W_KL.sum() + b_KL.sum() - 0.5*self.num_weights
+#     def KL(self): # get KL between q and prior for this layer
+#         # W_KL = 0.5*(- self.W_logvar + torch.exp(self.W_logvar) + (self.W_mean)**2)
+#         # b_KL = 0.5*(- self.b_logvar + torch.exp(self.b_logvar) + (self.b_mean)**2)
+#         W_KL = 0.5*(self.W_prior_logvar - self.W_logvar + (torch.exp(self.W_logvar) + (self.W_mean - self.W_prior_mean)**2)/torch.exp(self.W_prior_logvar))
+#         b_KL = 0.5*(self.b_prior_logvar - self.b_logvar + (torch.exp(self.b_logvar) + (self.b_mean - self.b_prior_mean)**2)/torch.exp(self.b_prior_logvar))
+#         return W_KL.sum() + b_KL.sum() - 0.5*self.num_weights
 
-class Weight_Noise_Net(nn.Module):
-    def __init__(self, params, prior_init=False):
-        super(Weight_Noise_Net, self).__init__()
-        self.train_samples = params.train_samples
-        self.test_samples = params.test_samples
-        self.dataset = params.dataset
-        self.prior_logvar = params.prior_logvar
-        self.activation_name = params.activation
-        if params.activation == 'relu':
-            self.activation = F.relu
-        elif params.activation == 'tanh':
-            self.activation = torch.tanh
-        elif params.activation == 'bump':
-            self.activation = bump
-        elif params.activation == 'prelu':
-            self.prelu_weight = nn.Parameter(torch.Tensor([0.25]))
-            self.activation = F.prelu
-        elif params.activation == 'sine':
-            self.activation = torch.sin
+# class Weight_Noise_Net(nn.Module):
+#     def __init__(self, params, prior_init=False):
+#         super(Weight_Noise_Net, self).__init__()
+#         self.train_samples = params.train_samples
+#         self.test_samples = params.test_samples
+#         self.dataset = params.dataset
+#         self.prior_logvar = params.prior_logvar
+#         self.activation_name = params.activation
+#         if params.activation == 'relu':
+#             self.activation = F.relu
+#         elif params.activation == 'tanh':
+#             self.activation = torch.tanh
+#         elif params.activation == 'bump':
+#             self.activation = bump
+#         elif params.activation == 'prelu':
+#             self.prelu_weight = nn.Parameter(torch.Tensor([0.25]))
+#             self.activation = F.prelu
+#         elif params.activation == 'sine':
+#             self.activation = torch.sin
         
-         # adjust input and output size depending on dataset used and read output noise
-        if params.dataset == 'mnist':
-            self.input_channels = 1
-            self.input_size = 28*28
-            self.output_size = 10
-        elif params.dataset == '1d_cosine' or params.dataset == 'prior_dataset':
-            self.input_channels = 1
-            self.input_size = 1
-            self.output_size = 1
-            self.noise_variance = params.noise_variance
-        elif params.dataset == 'signs':
-            self.input_channels = 3
-            self.input_size = 64*64
-            self.output_size = 6
+#          # adjust input and output size depending on dataset used and read output noise
+#         if params.dataset == 'mnist':
+#             self.input_channels = 1
+#             self.input_size = 28*28
+#             self.output_size = 10
+#         elif params.dataset == '1d_cosine' or params.dataset == 'prior_dataset':
+#             self.input_channels = 1
+#             self.input_size = 1
+#             self.output_size = 1
+#             self.noise_variance = params.noise_variance
+#         elif params.dataset == 'signs':
+#             self.input_channels = 3
+#             self.input_size = 64*64
+#             self.output_size = 6
 
-        # create the layers in the network based on params
-        self.hidden_sizes = params.hidden_sizes
-        self.linears = nn.ModuleList([Weight_Noise_Layer(self.input_size*self.input_channels, self.hidden_sizes[0], self.prior_logvar, prior_init)])
-        self.linears.extend([Weight_Noise_Layer(self.hidden_sizes[i], self.hidden_sizes[i+1], self.prior_logvar, prior_init) for i in range(0, len(self.hidden_sizes)-1)])
-        self.linears.append(Weight_Noise_Layer(self.hidden_sizes[-1], self.output_size, self.prior_logvar, prior_init))
+#         # create the layers in the network based on params
+#         self.hidden_sizes = params.hidden_sizes
+#         self.linears = nn.ModuleList([Weight_Noise_Layer(self.input_size*self.input_channels, self.hidden_sizes[0], self.prior_logvar, prior_init)])
+#         self.linears.extend([Weight_Noise_Layer(self.hidden_sizes[i], self.hidden_sizes[i+1], self.prior_logvar, prior_init) for i in range(0, len(self.hidden_sizes)-1)])
+#         self.linears.append(Weight_Noise_Layer(self.hidden_sizes[-1], self.output_size, self.prior_logvar, prior_init))
 
-    def get_KL_term(self):
-        # calculate KL divergence between q and the prior for the entire network
-        KL_term = 0
-        for _, l in enumerate(self.linears):
-            KL_term = KL_term + l.KL()
-        return KL_term
+#     def get_KL_term(self):
+#         # calculate KL divergence between q and the prior for the entire network
+#         KL_term = 0
+#         for _, l in enumerate(self.linears):
+#             KL_term = KL_term + l.KL()
+#         return KL_term
 
-    def forward(self, s, no_samples, shared_weights=False):
-        s = s.view(-1, self.input_size*self.input_channels)
-        for i, l in enumerate(self.linears):
-            s = l(s, no_samples = no_samples, shared_weights = shared_weights)
-            if i < len(self.linears) - 1:
-                if self.activation_name == 'prelu':
-                    s = self.activation(s, self.prelu_weight)
-                else:
-                    s = self.activation(s) 
-        if self.dataset == '1d_cosine' or self.dataset == 'prior_dataset': # make this more flexible
-            # s has dimension (no_samples x batch_size x no_output=1)
-            s = s.view(no_samples, -1) # (no_samples x batch_size)
-            return s
-        else:
-            s = F.log_softmax(s, dim=2) # dimension (no_samples x batch_size x no_output)       
-            return torch.mean(s, 0) # taking the expectation, dimension (batch_size x no_output)
+#     def forward(self, s, no_samples, shared_weights=False):
+#         s = s.view(-1, self.input_size*self.input_channels)
+#         for i, l in enumerate(self.linears):
+#             s = l(s, no_samples = no_samples, shared_weights = shared_weights)
+#             if i < len(self.linears) - 1:
+#                 if self.activation_name == 'prelu':
+#                     s = self.activation(s, self.prelu_weight)
+#                 else:
+#                     s = self.activation(s) 
+#         if self.dataset == '1d_cosine' or self.dataset == 'prior_dataset': # make this more flexible
+#             # s has dimension (no_samples x batch_size x no_output=1)
+#             s = s.view(no_samples, -1) # (no_samples x batch_size)
+#             return s
+#         else:
+#             s = F.log_softmax(s, dim=2) # dimension (no_samples x batch_size x no_output)       
+#             return torch.mean(s, 0) # taking the expectation, dimension (batch_size x no_output)
 
-    def return_weights(self):
-        """return the weights and biases of the network"""
-        # return a list of lists - the first list goes through layers, and each item is a list that has means in 0th place and S.D.'s in 1st place
-        weights = []
-        biases = []
-        priors = []
-        for _, l in enumerate(self.linears):
-            layer_weights = []
-            layer_biases = []
-            layer_weights.append(l.W_mean.cpu().detach().numpy())
-            layer_biases.append(l.b_mean.cpu().detach().numpy())
+#     def return_weights(self):
+#         """return the weights and biases of the network"""
+#         # return a list of lists - the first list goes through layers, and each item is a list that has means in 0th place and S.D.'s in 1st place
+#         weights = []
+#         biases = []
+#         priors = []
+#         for _, l in enumerate(self.linears):
+#             layer_weights = []
+#             layer_biases = []
+#             layer_weights.append(l.W_mean.cpu().detach().numpy())
+#             layer_biases.append(l.b_mean.cpu().detach().numpy())
 
-            # read and expand the S.D.'s
-            weight_sd = np.sqrt(np.exp(l.W_logvar.cpu().detach().numpy()))
-            weight_sd = np.tile(weight_sd, (l.n_input, l.n_output))
-            layer_weights.append(weight_sd)
-            bias_sd = np.sqrt(np.exp(l.b_logvar.cpu().detach().numpy()))
-            bias_sd = np.tile(bias_sd, (l.n_output))
-            layer_biases.append(bias_sd)
+#             # read and expand the S.D.'s
+#             weight_sd = np.sqrt(np.exp(l.W_logvar.cpu().detach().numpy()))
+#             weight_sd = np.tile(weight_sd, (l.n_input, l.n_output))
+#             layer_weights.append(weight_sd)
+#             bias_sd = np.sqrt(np.exp(l.b_logvar.cpu().detach().numpy()))
+#             bias_sd = np.tile(bias_sd, (l.n_output))
+#             layer_biases.append(bias_sd)
 
-            weights.append(layer_weights)
-            biases.append(layer_biases)
-            priors.append(np.exp(l.prior_logvar/2))
-        return weights, biases, priors
+#             weights.append(layer_weights)
+#             biases.append(layer_biases)
+#             priors.append(np.exp(l.prior_logvar/2))
+#         return weights, biases, priors
 
-class MFVI_Prebias_Layer(nn.Module):
-    def __init__(self, n_input, n_output, prior_logvar, prior_init=False):
-        super(MFVI_Prebias_Layer, self).__init__()
-        self.n_input = n_input
-        self.n_output = n_output
-        self.prior_logvar = prior_logvar
+# class MFVI_Prebias_Layer(nn.Module):
+#     def __init__(self, n_input, n_output, prior_logvar, prior_init=False):
+#         super(MFVI_Prebias_Layer, self).__init__()
+#         self.n_input = n_input
+#         self.n_output = n_output
+#         self.prior_logvar = prior_logvar
 
-        """initialise parameters and priors following 'Neural network ensembles and variational inference revisited', Appendix A"""
-        # weight parameters
-        self.W_mean = nn.Parameter(torch.Tensor(n_input, n_output).normal_(0, 1/np.sqrt(4*n_output))) # initialisation of weight means
-        self.W_logvar = nn.Parameter(torch.Tensor(n_input, n_output).normal_(-11.5, 1e-10)) # initialisation of weight logvariances # -11.5 usually
-        # bias parameters
-        self.b_mean = nn.Parameter(torch.Tensor(n_output).normal_(0, 1e-10)) # initialisation of bias means
-        self.b_logvar = nn.Parameter(torch.Tensor(n_output).normal_(-11.5, 1e-10)) # initialisation of bias logvariances # -11.5 usually
+#         """initialise parameters and priors following 'Neural network ensembles and variational inference revisited', Appendix A"""
+#         # weight parameters
+#         self.W_mean = nn.Parameter(torch.Tensor(n_input, n_output).normal_(0, 1/np.sqrt(4*n_output))) # initialisation of weight means
+#         self.W_logvar = nn.Parameter(torch.Tensor(n_input, n_output).normal_(-11.5, 1e-10)) # initialisation of weight logvariances # -11.5 usually
+#         # bias parameters
+#         self.b_mean = nn.Parameter(torch.Tensor(n_output).normal_(0, 1e-10)) # initialisation of bias means
+#         self.b_logvar = nn.Parameter(torch.Tensor(n_output).normal_(-11.5, 1e-10)) # initialisation of bias logvariances # -11.5 usually
         
-        # prior parameters 
-        self.W_prior_mean = Variable(torch.zeros(n_input, n_output).cuda())
-        self.W_prior_logvar = Variable(prior_logvar*torch.ones(n_input, n_output).cuda())
-        self.b_prior_mean = Variable(torch.zeros(n_output).cuda())
-        self.b_prior_logvar = Variable(prior_logvar*torch.ones(n_output).cuda())
+#         # prior parameters 
+#         self.W_prior_mean = Variable(torch.zeros(n_input, n_output).cuda())
+#         self.W_prior_logvar = Variable(prior_logvar*torch.ones(n_input, n_output).cuda())
+#         self.b_prior_mean = Variable(torch.zeros(n_output).cuda())
+#         self.b_prior_logvar = Variable(prior_logvar*torch.ones(n_output).cuda())
 
-        if prior_init == True: # initialise parameters to their prior values
-            self.W_mean = nn.Parameter(torch.zeros(n_input, n_output))
-            self.W_logvar = nn.Parameter(prior_logvar*torch.ones(n_input, n_output))
-            self.b_mean = nn.Parameter(torch.zeros(n_output)) #################################################
-            self.b_logvar = nn.Parameter(prior_logvar*torch.ones(n_output))
+#         if prior_init == True: # initialise parameters to their prior values
+#             self.W_mean = nn.Parameter(torch.zeros(n_input, n_output))
+#             self.W_logvar = nn.Parameter(prior_logvar*torch.ones(n_input, n_output))
+#             self.b_mean = nn.Parameter(torch.zeros(n_output)) #################################################
+#             self.b_logvar = nn.Parameter(prior_logvar*torch.ones(n_output))
 
-        self.num_weights = n_input*n_output + n_output # number of weights and biases
+#         self.num_weights = n_input*n_output + n_output # number of weights and biases
  
-    def forward(self, x, no_samples, shared_weights): # number of samples per forward pass
-        """
-        input is either (batch_size x no_input), if this is the first layer of the network, or (no_samples x batch_size x no_input), 
-        and output is (no_samples x batch_size x no_output)
-        """
+#     def forward(self, x, no_samples, shared_weights): # number of samples per forward pass
+#         """
+#         input is either (batch_size x no_input), if this is the first layer of the network, or (no_samples x batch_size x no_input), 
+#         and output is (no_samples x batch_size x no_output)
+#         """
 
-        if shared_weights == True: # can't use local reparam trick if we want to sample functions from the network. assume we will only do one test sample at a time
-            batch_size = x.size()[0]
-            # sample just one weight matrix and just one bias vector
-            W_var = torch.exp(self.W_logvar)
-            b_var = torch.exp(self.b_logvar)
-            z_W = Variable(torch.Tensor(self.n_input, self.n_output).normal_(0, 1).cuda())
-            z_b = Variable(torch.Tensor(self.n_output).normal_(0, 1).cuda())
-            W = self.W_mean + torch.mul(torch.sqrt(W_var), z_W)
-            W_summed = torch.sum(W, dim=0)
-            b = self.b_mean + torch.mul(torch.sqrt(b_var), z_b)
-            b = torch.mul(W_summed, b)
-            b = b.expand(batch_size, -1)
-            samples_activations = torch.mm(x, W) + b
+#         if shared_weights == True: # can't use local reparam trick if we want to sample functions from the network. assume we will only do one test sample at a time
+#             batch_size = x.size()[0]
+#             # sample just one weight matrix and just one bias vector
+#             W_var = torch.exp(self.W_logvar)
+#             b_var = torch.exp(self.b_logvar)
+#             z_W = Variable(torch.Tensor(self.n_input, self.n_output).normal_(0, 1).cuda())
+#             z_b = Variable(torch.Tensor(self.n_output).normal_(0, 1).cuda())
+#             W = self.W_mean + torch.mul(torch.sqrt(W_var), z_W)
+#             W_summed = torch.sum(W, dim=0)
+#             b = self.b_mean + torch.mul(torch.sqrt(b_var), z_b)
+#             b = torch.mul(W_summed, b)
+#             b = b.expand(batch_size, -1)
+#             samples_activations = torch.mm(x, W) + b
 
-        else: # can't use local reparam for prebiasing apparently
-            # find out if this is the first layer of the network. if it is, perform an expansion to no_samples
-            if len(x.shape) == 2:
-                batch_size = x.size()[0] 
-                W_sigma = torch.exp(self.W_logvar/2)
-                b_sigma = torch.exp(self.b_logvar/2)
-                z_W = Variable(torch.Tensor(no_samples, batch_size, self.n_input, self.n_output).normal_(0, 1).cuda())
-                W = self.W_mean.expand(no_samples, batch_size, -1, -1) + torch.mul(W_sigma.expand(no_samples, batch_size, -1, -1), z_W)
-                W_summed = torch.sum(W, dim=2)
+#         else: # can't use local reparam for prebiasing apparently
+#             # find out if this is the first layer of the network. if it is, perform an expansion to no_samples
+#             if len(x.shape) == 2:
+#                 batch_size = x.size()[0] 
+#                 W_sigma = torch.exp(self.W_logvar/2)
+#                 b_sigma = torch.exp(self.b_logvar/2)
+#                 z_W = Variable(torch.Tensor(no_samples, batch_size, self.n_input, self.n_output).normal_(0, 1).cuda())
+#                 W = self.W_mean.expand(no_samples, batch_size, -1, -1) + torch.mul(W_sigma.expand(no_samples, batch_size, -1, -1), z_W)
+#                 W_summed = torch.sum(W, dim=2)
 
-                z_b = Variable(torch.Tensor(no_samples, batch_size, self.n_output).normal_(0, 1).cuda())
-                b = self.b_mean.expand(no_samples, batch_size, -1) + torch.mul(b_sigma.expand(no_samples, batch_size, -1), z_b)
+#                 z_b = Variable(torch.Tensor(no_samples, batch_size, self.n_output).normal_(0, 1).cuda())
+#                 b = self.b_mean.expand(no_samples, batch_size, -1) + torch.mul(b_sigma.expand(no_samples, batch_size, -1), z_b)
 
-                Wx = torch.einsum('sbio,bi->sbo', (W, x))
-                Wb = torch.mul(W_summed, b)
+#                 Wx = torch.einsum('sbio,bi->sbo', (W, x))
+#                 Wb = torch.mul(W_summed, b)
 
-                samples_activations = Wx + Wb 
+#                 samples_activations = Wx + Wb 
 
-            elif len(x.shape) == 3:
-                batch_size = x.size()[1]
-                W_sigma = torch.exp(self.W_logvar/2)
-                b_sigma = torch.exp(self.b_logvar/2)
-                z_W = Variable(torch.Tensor(no_samples, batch_size, self.n_input, self.n_output).normal_(0, 1).cuda())
-                W = self.W_mean.expand(no_samples, batch_size, -1, -1) + torch.mul(W_sigma.expand(no_samples, batch_size, -1, -1), z_W)
-                W_summed = torch.sum(W, dim=2)
+#             elif len(x.shape) == 3:
+#                 batch_size = x.size()[1]
+#                 W_sigma = torch.exp(self.W_logvar/2)
+#                 b_sigma = torch.exp(self.b_logvar/2)
+#                 z_W = Variable(torch.Tensor(no_samples, batch_size, self.n_input, self.n_output).normal_(0, 1).cuda())
+#                 W = self.W_mean.expand(no_samples, batch_size, -1, -1) + torch.mul(W_sigma.expand(no_samples, batch_size, -1, -1), z_W)
+#                 W_summed = torch.sum(W, dim=2)
 
-                z_b = Variable(torch.Tensor(no_samples, batch_size, self.n_output).normal_(0, 1).cuda())
-                b = self.b_mean.expand(no_samples, batch_size, -1) + torch.mul(b_sigma.expand(no_samples, batch_size, -1), z_b)
+#                 z_b = Variable(torch.Tensor(no_samples, batch_size, self.n_output).normal_(0, 1).cuda())
+#                 b = self.b_mean.expand(no_samples, batch_size, -1) + torch.mul(b_sigma.expand(no_samples, batch_size, -1), z_b)
 
-                Wx = torch.einsum('sbio,sbi->sbo', (W, x))
-                Wb = torch.mul(W_summed, b)
+#                 Wx = torch.einsum('sbio,sbi->sbo', (W, x))
+#                 Wb = torch.mul(W_summed, b)
 
-                samples_activations = Wx + Wb
+#                 samples_activations = Wx + Wb
 
-        return samples_activations
+#         return samples_activations
 
-    def get_shared_random(self, no_samples, batch_size):
-        z = Variable(torch.Tensor(no_samples, self.n_output).normal_(0, 1).cuda())
-        z = z.expand(batch_size, -1, -1)
-        return torch.transpose(z, 0, 1)
+#     def get_shared_random(self, no_samples, batch_size):
+#         z = Variable(torch.Tensor(no_samples, self.n_output).normal_(0, 1).cuda())
+#         z = z.expand(batch_size, -1, -1)
+#         return torch.transpose(z, 0, 1)
 
-    def get_random(self, no_samples, batch_size):
-        return Variable(torch.Tensor(no_samples, batch_size, self.n_output).normal_(0, 1).cuda()) # standard normal noise matrix
+#     def get_random(self, no_samples, batch_size):
+#         return Variable(torch.Tensor(no_samples, batch_size, self.n_output).normal_(0, 1).cuda()) # standard normal noise matrix
 
-    def KL(self): # get KL between q and prior for this layer
-        # W_KL = 0.5*(- self.W_logvar + torch.exp(self.W_logvar) + (self.W_mean)**2)
-        # b_KL = 0.5*(- self.b_logvar + torch.exp(self.b_logvar) + (self.b_mean)**2)
-        W_KL = 0.5*(self.W_prior_logvar - self.W_logvar + (torch.exp(self.W_logvar) + (self.W_mean - self.W_prior_mean)**2)/torch.exp(self.W_prior_logvar))
-        b_KL = 0.5*(self.b_prior_logvar - self.b_logvar + (torch.exp(self.b_logvar) + (self.b_mean - self.b_prior_mean)**2)/torch.exp(self.b_prior_logvar))
-        return W_KL.sum() + b_KL.sum() - 0.5*self.num_weights
+#     def KL(self): # get KL between q and prior for this layer
+#         # W_KL = 0.5*(- self.W_logvar + torch.exp(self.W_logvar) + (self.W_mean)**2)
+#         # b_KL = 0.5*(- self.b_logvar + torch.exp(self.b_logvar) + (self.b_mean)**2)
+#         W_KL = 0.5*(self.W_prior_logvar - self.W_logvar + (torch.exp(self.W_logvar) + (self.W_mean - self.W_prior_mean)**2)/torch.exp(self.W_prior_logvar))
+#         b_KL = 0.5*(self.b_prior_logvar - self.b_logvar + (torch.exp(self.b_logvar) + (self.b_mean - self.b_prior_mean)**2)/torch.exp(self.b_prior_logvar))
+#         return W_KL.sum() + b_KL.sum() - 0.5*self.num_weights
 
-class MFVI_Prebias_Net(nn.Module):
-    def __init__(self, params, prior_init=False):
-        super(MFVI_Prebias_Net, self).__init__()
-        self.train_samples = params.train_samples
-        self.test_samples = params.test_samples
-        self.dataset = params.dataset
-        self.prior_logvar = params.prior_logvar
-        self.activation_name = params.activation
-        if params.activation == 'relu':
-            self.activation = F.relu
-        elif params.activation == 'tanh':
-            self.activation = torch.tanh
-        elif params.activation == 'bump':
-            self.activation = bump
-        elif params.activation == 'prelu':
-            self.prelu_weight = nn.Parameter(torch.Tensor([0.25]))
-            self.activation = F.prelu
+# class MFVI_Prebias_Net(nn.Module):
+    # def __init__(self, params, prior_init=False):
+    #     super(MFVI_Prebias_Net, self).__init__()
+    #     self.train_samples = params.train_samples
+    #     self.test_samples = params.test_samples
+    #     self.dataset = params.dataset
+    #     self.prior_logvar = params.prior_logvar
+    #     self.activation_name = params.activation
+    #     if params.activation == 'relu':
+    #         self.activation = F.relu
+    #     elif params.activation == 'tanh':
+    #         self.activation = torch.tanh
+    #     elif params.activation == 'bump':
+    #         self.activation = bump
+    #     elif params.activation == 'prelu':
+    #         self.prelu_weight = nn.Parameter(torch.Tensor([0.25]))
+    #         self.activation = F.prelu
         
-         # adjust input and output size depending on dataset used and read output noise
-        if params.dataset == 'mnist':
-            self.input_channels = 1
-            self.input_size = 28*28
-            self.output_size = 10
-        elif params.dataset == '1d_cosine' or params.dataset == 'prior_dataset':
-            self.input_channels = 1
-            self.input_size = 1
-            self.output_size = 1
-            self.noise_variance = params.noise_variance
-        elif params.dataset == 'signs':
-            self.input_channels = 3
-            self.input_size = 64*64
-            self.output_size = 6
+    #      # adjust input and output size depending on dataset used and read output noise
+    #     if params.dataset == 'mnist':
+    #         self.input_channels = 1
+    #         self.input_size = 28*28
+    #         self.output_size = 10
+    #     elif params.dataset == '1d_cosine' or params.dataset == 'prior_dataset':
+    #         self.input_channels = 1
+    #         self.input_size = 1
+    #         self.output_size = 1
+    #         self.noise_variance = params.noise_variance
+    #     elif params.dataset == 'signs':
+    #         self.input_channels = 3
+    #         self.input_size = 64*64
+    #         self.output_size = 6
 
-        # create the layers in the network based on params
-        self.hidden_sizes = params.hidden_sizes
-        self.linears = nn.ModuleList([MFVI_Prebias_Layer(self.input_size*self.input_channels, self.hidden_sizes[0], self.prior_logvar, prior_init)])
-        self.linears.extend([MFVI_Prebias_Layer(self.hidden_sizes[i], self.hidden_sizes[i+1], self.prior_logvar, prior_init) for i in range(0, len(self.hidden_sizes)-1)])
-        self.linears.append(MFVI_Prebias_Layer(self.hidden_sizes[-1], self.output_size, self.prior_logvar, prior_init))
+    #     # create the layers in the network based on params
+    #     self.hidden_sizes = params.hidden_sizes
+    #     self.linears = nn.ModuleList([MFVI_Prebias_Layer(self.input_size*self.input_channels, self.hidden_sizes[0], self.prior_logvar, prior_init)])
+    #     self.linears.extend([MFVI_Prebias_Layer(self.hidden_sizes[i], self.hidden_sizes[i+1], self.prior_logvar, prior_init) for i in range(0, len(self.hidden_sizes)-1)])
+    #     self.linears.append(MFVI_Prebias_Layer(self.hidden_sizes[-1], self.output_size, self.prior_logvar, prior_init))
 
-    def get_KL_term(self):
-        # calculate KL divergence between q and the prior for the entire network
-        KL_term = 0
-        for _, l in enumerate(self.linears):
-            KL_term = KL_term + l.KL()
-        return KL_term
+    # def get_KL_term(self):
+    #     # calculate KL divergence between q and the prior for the entire network
+    #     KL_term = 0
+    #     for _, l in enumerate(self.linears):
+    #         KL_term = KL_term + l.KL()
+    #     return KL_term
 
-    def forward(self, s, no_samples, shared_weights=False):
-        #print('forward net class')
-        s = s.view(-1, self.input_size*self.input_channels)
-        for i, l in enumerate(self.linears):
-            s = l(s, no_samples = no_samples, shared_weights = shared_weights)
-            if i < len(self.linears) - 1:
-                if self.activation_name == 'prelu':
-                    s = self.activation(s, self.prelu_weight)
-                else:
-                    s = self.activation(s) 
-        if self.dataset == '1d_cosine' or self.dataset == 'prior_dataset': # make this more flexible
-            # s has dimension (no_samples x batch_size x no_output=1)
-            s = s.view(no_samples, -1) # (no_samples x batch_size)
-            return s
-        else:
-            s = F.log_softmax(s, dim=2) # dimension (no_samples x batch_size x no_output)       
-            return torch.mean(s, 0) # taking the expectation, dimension (batch_size x no_output)
+    # def forward(self, s, no_samples, shared_weights=False):
+    #     #print('forward net class')
+    #     s = s.view(-1, self.input_size*self.input_channels)
+    #     for i, l in enumerate(self.linears):
+    #         s = l(s, no_samples = no_samples, shared_weights = shared_weights)
+    #         if i < len(self.linears) - 1:
+    #             if self.activation_name == 'prelu':
+    #                 s = self.activation(s, self.prelu_weight)
+    #             else:
+    #                 s = self.activation(s) 
+    #     if self.dataset == '1d_cosine' or self.dataset == 'prior_dataset': # make this more flexible
+    #         # s has dimension (no_samples x batch_size x no_output=1)
+    #         s = s.view(no_samples, -1) # (no_samples x batch_size)
+    #         return s
+    #     else:
+    #         s = F.log_softmax(s, dim=2) # dimension (no_samples x batch_size x no_output)       
+    #         return torch.mean(s, 0) # taking the expectation, dimension (batch_size x no_output)
 
-    def return_weights(self):
-        """return the weights and biases of the network"""
-        # return a list of lists - the first list goes through layers, and each item is a list that has means in 0th place and S.D.'s in 1st place
-        weights = []
-        biases = []
-        for _, l in enumerate(self.linears):
-            layer_weights = []
-            layer_biases = []
-            layer_weights.append(l.W_mean.cpu().detach().numpy())
-            layer_biases.append(l.b_mean.cpu().detach().numpy())
-            layer_weights.append(np.sqrt(np.exp(l.W_logvar.cpu().detach().numpy())))
-            layer_biases.append(np.sqrt(np.exp(l.b_logvar.cpu().detach().numpy())))
-            weights.append(layer_weights)
-            biases.append(layer_biases)
-        return weights, biases
+    # def return_weights(self):
+    #     """return the weights and biases of the network"""
+    #     # return a list of lists - the first list goes through layers, and each item is a list that has means in 0th place and S.D.'s in 1st place
+    #     weights = []
+    #     biases = []
+    #     for _, l in enumerate(self.linears):
+    #         layer_weights = []
+    #         layer_biases = []
+    #         layer_weights.append(l.W_mean.cpu().detach().numpy())
+    #         layer_biases.append(l.b_mean.cpu().detach().numpy())
+    #         layer_weights.append(np.sqrt(np.exp(l.W_logvar.cpu().detach().numpy())))
+    #         layer_biases.append(np.sqrt(np.exp(l.b_logvar.cpu().detach().numpy())))
+    #         weights.append(layer_weights)
+    #         biases.append(layer_biases)
+    #     return weights, biases
 
 class MAP_Linear_Layer(nn.Module):
     def __init__(self, n_input, n_output):

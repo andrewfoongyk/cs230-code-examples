@@ -49,16 +49,16 @@ class Prior_Dataset_Builder(object):
         plt.show()         
 
 if __name__ == '__main__':
-    n = 2 # number of datapoints
+    n = 100 # number of datapoints
     noise_var = 0.01 # datapoint noise
-    X = np.random.uniform(-1, 1, n)
-    # X1 = np.random.uniform(-1, -0.7, 50)
-    # X2 = np.random.uniform(0.5, 1, 50)
-    # X = np.concatenate((X1, X2), axis=0)
+    # X = np.random.uniform(-1, 1, n)
+    X1 = np.random.uniform(-1, -0.7, 50)
+    X2 = np.random.uniform(0.5, 1, 50)
+    X = np.concatenate((X1, X2), axis=0)
 
-    # cosx = np.cos(4*X + 0.8)
+    cosx = np.cos(4*X + 0.8)
     randn = np.random.randn(n)*np.sqrt(noise_var)
-    Y = 0.5*X + 0.5 + randn
+    Y = cosx + randn
 
     # def func(x):
     #     return np.cos(2*x + 0.8)

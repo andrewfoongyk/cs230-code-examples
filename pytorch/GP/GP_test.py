@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.metrics import pairwise_distances 
 import matplotlib.pyplot as plt
 import pickle
+import os
 
 def make_K_SE(x, sigma, l):
     # using SE kernel def given in Murphy pg. 521
@@ -75,13 +76,14 @@ if __name__ == "__main__":
 
     # hyperparameters
     sigma_n = 0.1 # noise standard deviation
-    NN_params = {'sigma_b':1, 'sigma_w':4}
+    NN_params = {'sigma_b':1, 'sigma_w':4} # sigma_w is the same as Neal's omega
     SE_params = {'sigma':1, 'l':0.5}
 
     xstar = np.linspace(-3, 3, num=1000)
 
     pred_mean, pred_var = GP_predict(x, y, xstar, NN_kernel, NN_params, sigma_n)
 
+    
     ##############
     # xstar = np.linspace(-3, 3, num=1000)
     # K = make_K_SE(x, sigma, l)
@@ -110,6 +112,18 @@ if __name__ == "__main__":
     plt.fill_between(xstar, pred_mean + np.sqrt(pred_var) + sigma_n, 
             pred_mean - np.sqrt(pred_var) - sigma_n, color='b', alpha=0.3)
     plt.savefig(filename)
+
+    # pickle everything as numpy arrays for posterity
+    inputs = xstar
+    mean = pred_mean
+    sd = np.sqrt(pred_var + sigma_n**2)
+
+    pickle_location = os.path.join('experiments', 'plot_GP')
+    outfile = open(pickle_location, 'wb')
+    pickle.dump(inputs, outfile)
+    pickle.dump(mean, outfile)
+    pickle.dump(sd, outfile)
+    outfile.close()
 
     
 

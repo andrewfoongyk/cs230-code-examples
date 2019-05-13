@@ -93,7 +93,7 @@ class MFVI_Linear_Layer(nn.Module):
         return W_KL.sum() + b_KL.sum() - 0.5*self.num_weights
 
 class MFVI_Net(nn.Module):
-    def __init__(self, noise_variance, hidden_sizes, omega, activation=torch.tanh, learned_noise_var=False, input_dim=None, noise_param_init=None, standard_normal_prior=None):
+    def __init__(self, noise_variance, hidden_sizes, omega, activation, learned_noise_var=False, input_dim=None, noise_param_init=None, standard_normal_prior=None):
         super(MFVI_Net, self).__init__()
         self.train_samples = 32 # following Marcin's work means 1 sample
         self.test_samples = 100
@@ -459,12 +459,12 @@ if __name__ == "__main__":
 
     input_dims = {'boston_housing': 13, 'concrete': 8, 'energy': 8, 'kin8nm': 8, 'power': 4, 'protein': 9, 'wine': 11, 'yacht': 6, 'naval': 16}
     #datasets = ['boston_housing', 'concrete', 'energy', 'kin8nm', 'naval','power', 'protein', 'wine', 'yacht']
-    datasets = ['protein']
+    datasets = ['kin8nm', 'naval','power', 'protein']
 
     # hyperparameters
     standard_normal_prior = True
-    activation_function = F.relu
-    hidden_sizes = [50, 50]
+    activation_function = torch.tanh
+    hidden_sizes = [50]
     learned_noise_var = True
     noise_param_init = -1
     gap = True
@@ -478,7 +478,7 @@ if __name__ == "__main__":
             else:
                 no_splits = 20
 
-        directory = './/experiments//gap//' + dataset + '//Apr3_2HL'
+        directory = './/experiments//gap//' + dataset + '//1HL_tanh'
         os.mkdir(directory)
         input_dim = input_dims[dataset]
         omega_range = [1.0]

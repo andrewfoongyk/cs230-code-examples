@@ -19,7 +19,7 @@ def plot_reg(model, data_dir, params, model_dir, epoch_number = 0, prior_draw=Fa
         with open(filename, 'rb') as f:
             data = pickle.load(f)
         print('unpickled 1-D cosine dataset')
-
+    
     X = data[:,0]
     Y = data[:,1]
     X = np.float32(X)
@@ -81,6 +81,18 @@ def plot_reg(model, data_dir, params, model_dir, epoch_number = 0, prior_draw=Fa
         plt.plot(test_x, mean, color='b')
         plt.fill_between(test_x, mean + np.sqrt(variance), 
                 mean - np.sqrt(variance), color='b', alpha=0.3)
+
+        # pickle everything as numpy arrays for posterity
+        inputs_mfvi = test_x
+        mean_mfvi = mean
+        sd_mfvi = np.sqrt(variance)
+
+        pickle_location = os.path.join(model_dir, 'plot_mfvi_relu')
+        outfile = open(pickle_location, 'wb')
+        pickle.dump(inputs_mfvi, outfile)
+        pickle.dump(mean_mfvi, outfile)
+        pickle.dump(sd_mfvi, outfile)
+        outfile.close()
         
         if title is not None:
             title = title

@@ -115,3 +115,6 @@ pytorch/metaprior/experiments
 pytorch/laplace/experiments
 pytorch/MFVI/experiments
 pytorch/MFVI_analysis/experiments
+pytorch/FCVI/experiments
+pytorch/bayesian_ensemble/experiments
+pytorch/MAP/experiments

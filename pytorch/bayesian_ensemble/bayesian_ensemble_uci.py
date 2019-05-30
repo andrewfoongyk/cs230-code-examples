@@ -159,7 +159,6 @@ def sample_ensemble(ensemble, inputs, labels, train_mean, train_sd):
     # scale the inputs
     inputs = inputs - train_mean[:-1] 
     inputs = inputs/train_sd[:-1]
-    import pdb; pdb.set_trace()
     all_outputs = ensemble.get_all_outputs(inputs) # batch_size x no_samples
 
     # scale the outputs
@@ -443,17 +442,18 @@ if __name__ == "__main__":
     torch.manual_seed(seed) 
 
     input_dims = {'boston_housing': 13, 'concrete': 8, 'energy': 8, 'kin8nm': 8, 'power': 4, 'protein': 9, 'wine': 11, 'yacht': 6, 'naval': 16}
-    datasets = ['boston_housing', 'concrete', 'energy', 'kin8nm', 'naval','power', 'protein', 'wine', 'yacht']
+    # datasets = ['boston_housing', 'concrete', 'energy', 'kin8nm', 'naval','power', 'protein', 'wine', 'yacht']
+    datasets = ['energy', 'naval']
 
     # hyperparameters
-    standard_normal_prior = True
+    standard_normal_prior = False
     random_prior = True
     no_members = 10
     activation_function = F.relu
     hidden_sizes = [50]
     learned_noise_var = True
     noise_param_init = -1
-    gap = False
+    gap = True
 
     for dataset in datasets: 
         if gap == True:
@@ -464,13 +464,13 @@ if __name__ == "__main__":
             else:
                 no_splits = 20
 
-        directory = './/experiments//yarin//' + dataset + '//1HL_relu'
+        directory = './/experiments//gap//' + dataset + '//1HL_relu_nealprior'
         os.mkdir(directory)
         input_dim = input_dims[dataset]
         omega_range = [1.0, 2.0]
         minibatch_size_range = [100]
         learning_rate_range = [0.01, 0.001]
-        no_epochs_range = [200, 400, 1000]
+        no_epochs_range = [20, 40, 100]
 
         # save text file with hyperparameters
         file = open(directory + '/hyperparameters.txt','w')

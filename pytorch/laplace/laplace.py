@@ -62,7 +62,7 @@ class MLP(nn.Module):
         labels = labels.reshape(labels.size()[0], 1)
         L2_term = 0
         for _, l in enumerate(self.linears): # Neal's prior (bias has variance 1)
-            n_inputs = l.weight.size()[0]
+            n_inputs = l.weight.size()[1]
             single_layer_L2 = 0.5*(n_inputs/(self.omega**2))*torch.sum(l.weight**2) + 0.5*torch.sum(l.bias**2)
             L2_term = L2_term + single_layer_L2
         if self.learned_noise_var == True:
@@ -222,7 +222,7 @@ class MLP(nn.Module):
                 
 def plot_reg(model, data_load, directory, iter_number=0, linearise=False, Ainv=0, sampling=False, covscale=1, mean=0, title=''):
     # evaluate model on test points
-    N = 300 # number of test points
+    N = 1000 # number of test points
     x_lower = -3
     x_upper = 3
     test_inputs_np = np.linspace(x_lower, x_upper, N)
@@ -338,8 +338,6 @@ def plot(test_inputs, mean, sd, directory, title=''):
     # pickle everything as numpy arrays for posterity
     if title == '':
         inputs = test_inputs
-        #mean = test_y
-        #sd = predictive_sd
 
         pickle_location = os.path.join(directory, 'plot_laplace_tanh')
         outfile = open(pickle_location, 'wb')
@@ -470,10 +468,11 @@ if __name__ == "__main__":
     no_iters = 20001
     plot_iters = 1000
     learned_noise_var = False
+    diagonal_cov = False
     #subsample = True
     #num_subsamples = 5
 
-    directory = './/experiments//ICML_relu'
+    directory = './/experiments//ICML_relu_fixed_prior'
     #data_location = './/experiments//2_points_init//prior_dataset.pkl'
     data_location = '..//vision//data//1D_COSINE//1d_cosine_separated.pkl'
 
@@ -556,11 +555,11 @@ if __name__ == "__main__":
     plot(test_inputs, predictive_mean, predictive_sd, directory)
 
     # subsample and plot
-    for num_subsamples in [100, 70, 40, 20, 10, 5, 4, 3, 2, 1]:
-        predictive_var = model.linearised_laplace(x_train, test_inputs, num_subsamples)
-        predictive_sd = torch.sqrt(predictive_var)
-        # plot
-        plot(test_inputs, predictive_mean, predictive_sd, directory, title = '_subsample_' + str(num_subsamples))
+    # for num_subsamples in [100, 70, 40, 20, 10, 5, 4, 3, 2, 1]:
+    #     predictive_var = model.linearised_laplace(x_train, test_inputs, num_subsamples)
+    #     predictive_sd = torch.sqrt(predictive_var)
+    #     # plot
+    #     plot(test_inputs, predictive_mean, predictive_sd, directory, title = '_subsample_' + str(num_subsamples))
 
     ##########################################
 
@@ -575,7 +574,12 @@ if __name__ == "__main__":
     # P = torch.diag(P_vector)
     # # calculate and invert (negative) Hessian of posterior
     # A = (1/model.noise_variance)*H + P 
-    # Ainv = torch.inverse(A)    
+    # if diagonal_cov:
+    #     A = torch.diag(A)
+    #     Ainv = 1/A
+    #     Ainv = torch.diag(Ainv)
+    # else:
+    #     Ainv = torch.inverse(A)    
     # # plot regression with error bars using linearisation
     # plot_reg(model, data_load, directory, iter_number=no_iters, linearise=True, Ainv=Ainv)
     # # plot covariance and correlation matrix
